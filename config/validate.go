@@ -105,6 +105,8 @@ func (c *Config) Validate(home string) error {
 			err = c.validatePKCS11Key(i, home)
 		case BackendAWSKMS:
 			err = c.validateAWSKMSKey(i)
+		case BackendBluetooth:
+			err = c.validateBluetoothKey(i)
 		default:
 			err = fmt.Errorf("config: key[%d] has unknown backend %q", i, c.Keys[i].Backend)
 		}
@@ -124,6 +126,18 @@ func (c *Config) Validate(home string) error {
 		if err := c.validateGRPC(home); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateBluetoothKey checks a zafu peer name. The consensus key is not on disk.
+func (c *Config) validateBluetoothKey(i int) error {
+	k := &c.Keys[i]
+	if k.Algorithm != "" && k.Algorithm != AlgoED25519 {
+		return fmt.Errorf("config: key[%d] (bluetooth) only supports ed25519", i)
+	}
+	if k.Peer == "" {
+		return fmt.Errorf("config: key[%d] (bluetooth) has empty peer", i)
 	}
 	return nil
 }

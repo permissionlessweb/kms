@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 820" width="720" height="820" role="img" aria-labelledby="fig4-title fig4-desc">
+  <title id="fig4-title">The Signer tab</title>
+  <desc id="fig4-desc">Field view of the Zigner Signer tab. The tab bar has Keys and Signer, with Signer selected. The body is headed Last signed block and contains two labeled fields, Height and Latency. Both fields are blank because the document gives no measured block height or latency. A note says latency is the time from the laptop request to the phone signature, and that the same facts are on the Bluetooth signer screen.</desc>
+  <style>
+    text { font-family: 'STIX Two Text', 'Times New Roman', Times, Georgia, serif; }
+    .kicker { font-size: 10.5px; letter-spacing: 2.2px; fill: #3a3a3a; }
+    .title { font-size: 28px; fill: #141414; }
+    .sub { font-size: 12.5px; font-style: italic; fill: #5c5c5c; }
+    .smallcaps { font-size: 10.5px; letter-spacing: 1.6px; fill: #2a2a2a; }
+    .tab { font-size: 10.5px; letter-spacing: 1.8px; }
+    .field { font-size: 16px; fill: #161616; }
+    .sm { font-size: 11.5px; fill: #2c2c2c; }
+    .xs { font-size: 10.5px; fill: #444; }
+    .ital { font-style: italic; fill: #5c5c5c; }
+    .rule { stroke: #1e1e1e; stroke-width: 0.8; fill: none; }
+    .hair { stroke: #8a8a8a; stroke-width: 0.6; fill: none; }
+    .frame { fill: #fbfaf6; stroke: #1a1a1a; stroke-width: 1.2; }
+    .screen { fill: none; stroke: #8a8a8a; stroke-width: 0.6; }
+    .fieldline { stroke: #6a6a6a; stroke-width: 0.9; fill: none; }
+    .dotted { stroke: #9a9a9a; stroke-width: 0.8; stroke-dasharray: 1 3; fill: none; }
+  </style>
+
+  <rect x="0" y="0" width="720" height="820" fill="#fbfaf6"/>
+
+  <text class="kicker" x="50" y="42">ZIGNER · SIGNER TAB</text>
+  <text class="kicker" x="670" y="42" text-anchor="end">FIG. 4</text>
+  <text class="title" x="50" y="92">The Signer tab</text>
+  <text class="sub" x="50" y="116">Field view. No measured height or latency is given, so both fields are blank.</text>
+  <line class="rule" x1="50" y1="134" x2="670" y2="134"/>
+
+  <!-- phone frame -->
+  <rect class="frame" x="190" y="166" width="340" height="490"/>
+  <rect class="screen" x="203" y="179" width="314" height="464"/>
+  <line class="hair" x1="330" y1="190" x2="390" y2="190"/>
+
+  <!-- tabs -->
+  <line class="hair" x1="203" y1="232" x2="517" y2="232"/>
+  <text class="tab" x="285" y="218" text-anchor="middle" fill="#666">KEYS</text>
+  <text class="tab" x="435" y="218" text-anchor="middle" fill="#141414">SIGNER</text>
+  <line class="rule" x1="405" y1="232" x2="465" y2="232" stroke-width="2"/>
+
+  <!-- body -->
+  <text class="smallcaps" x="233" y="290">LAST SIGNED BLOCK</text>
+  <line class="hair" x1="233" y1="300" x2="487" y2="300"/>
+
+  <text class="field" x="233" y="355">Height</text>
+  <line class="dotted" x1="300" y1="350" x2="448" y2="350"/>
+  <line class="fieldline" x1="448" y1="358" x2="487" y2="358"/>
+
+  <text class="field" x="233" y="430">Latency</text>
+  <line class="dotted" x1="300" y1="425" x2="448" y2="425"/>
+  <line class="fieldline" x1="448" y1="433" x2="487" y2="433"/>
+
+  <text class="xs ital" x="233" y="466">Latency is the time from the laptop</text>
+  <text class="xs ital" x="233" y="481">request to the phone signature.</text>
+
+  <line class="hair" x1="233" y1="515" x2="487" y2="515"/>
+
+  <!-- field callouts -->
+  <text class="xs" x="548" y="351">block height</text>
+  <line class="dotted" x1="542" y1="355" x2="494" y2="355"/>
+  <text class="xs" x="548" y="426">latency</text>
+  <line class="dotted" x1="542" y1="430" x2="494" y2="430"/>
+
+  <!-- notes -->
+  <text class="xs ital" x="190" y="694">The same facts are on the Bluetooth signer screen.</text>
+
+  <line class="rule" x1="50" y1="744" x2="670" y2="744"/>
+  <text class="xs" x="50" y="764">The Signer tab reports the last signed block and the latency of that signature.</text>
+  <text class="xs" x="50" y="782">Both fields are left blank: the document supplies no measured value.</text>
+</svg>

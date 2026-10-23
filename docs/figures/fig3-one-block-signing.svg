@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 800" width="1040" height="800" role="img" aria-labelledby="fig3-title fig3-desc">
+  <title id="fig3-title">One block, from the node request to the next block</title>
+  <desc id="fig3-desc">Sequence. The temporary node sends the KMS console a request with height, round, step, and block bytes. The console sends the bytes to the phone over Bluetooth. The phone signs with Ed25519 and does not use key size 256. The phone returns the signature. The console checks it against the public key and returns it to the node, which moves on only for a good signature. The latency bracket runs from the laptop request to the phone signature; no measured value is given. A dashed failure branch shows that no signature means the node does not move. The phone and the laptop append one log row: height, round, step, latency, time.</desc>
+  <style>
+    text { font-family: 'STIX Two Text', 'Times New Roman', Times, Georgia, serif; }
+    .kicker { font-size: 10.5px; letter-spacing: 2.2px; fill: #3a3a3a; }
+    .title { font-size: 29px; fill: #141414; }
+    .sub { font-size: 13px; font-style: italic; fill: #5c5c5c; }
+    .smallcaps { font-size: 10.5px; letter-spacing: 1.6px; fill: #2a2a2a; }
+    .sm { font-size: 11.5px; fill: #2c2c2c; }
+    .xs { font-size: 10.5px; fill: #444; }
+    .ital { font-style: italic; fill: #5c5c5c; }
+    .id { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 11px; fill: #222; }
+    .rule { stroke: #1e1e1e; stroke-width: 0.8; fill: none; }
+    .hair { stroke: #8a8a8a; stroke-width: 0.6; fill: none; }
+    .life { stroke: #8a8a8a; stroke-width: 0.7; stroke-dasharray: 3 5; fill: none; }
+    .ink { stroke: #161616; stroke-width: 1.25; fill: none; }
+    .dash { stroke: #5a5a5a; stroke-width: 0.9; stroke-dasharray: 4 4; fill: none; }
+  </style>
+  <defs>
+    <marker id="fig3-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#161616"/>
+    </marker>
+    <marker id="fig3-arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#5a5a5a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1040" height="800" fill="#fbfaf6"/>
+
+  <text class="kicker" x="60" y="42">ZIGNER · BLUETOOTH REMOTE SIGNER</text>
+  <text class="kicker" x="980" y="42" text-anchor="end">FIG. 3</text>
+  <text class="title" x="60" y="92">One block, from the request to the next block</text>
+  <text class="sub" x="60" y="116">Message order. The bracket measures the request-to-signature interval; no measured value is given.</text>
+  <line class="rule" x1="60" y1="134" x2="980" y2="134"/>
+
+  <!-- entity heads -->
+  <text class="smallcaps" x="170" y="158" text-anchor="middle">TEMPORARY NODE</text>
+  <text class="id" x="170" y="176" text-anchor="middle">temporary node</text>
+  <text class="smallcaps" x="520" y="158" text-anchor="middle">KMS CONSOLE</text>
+  <text class="id" x="520" y="176" text-anchor="middle">http://127.0.0.1:8791</text>
+  <text class="smallcaps" x="850" y="158" text-anchor="middle">PHONE</text>
+  <text class="sm" x="850" y="176" text-anchor="middle">Zigner app · consensus key</text>
+  <line class="rule" x1="60" y1="190" x2="980" y2="190"/>
+
+  <!-- lifelines -->
+  <line class="life" x1="170" y1="190" x2="170" y2="660"/>
+  <line class="life" x1="520" y1="190" x2="520" y2="660"/>
+  <line class="life" x1="850" y1="190" x2="850" y2="660"/>
+
+  <!-- 1 request -->
+  <line class="ink" x1="170" y1="250" x2="520" y2="250" marker-end="url(#fig3-arrow)"/>
+  <text class="xs" x="345" y="240" text-anchor="middle">sign request: height · round · step · block bytes</text>
+
+  <!-- 2 bytes over Bluetooth -->
+  <line class="ink" x1="520" y1="305" x2="850" y2="305" marker-end="url(#fig3-arrow)"/>
+  <text class="xs" x="685" y="295" text-anchor="middle">block bytes over Bluetooth</text>
+
+  <!-- phone self note -->
+  <text class="xs" x="815" y="345" text-anchor="end">signs with Ed25519</text>
+  <text class="xs" x="815" y="361" text-anchor="end">does not use key size 256</text>
+  <path class="ink" d="M850,332 h-22 v32 h22" marker-end="url(#fig3-arrow)"/>
+
+  <!-- 4 signature -->
+  <line class="ink" x1="850" y1="410" x2="520" y2="410" marker-end="url(#fig3-arrow)"/>
+  <text class="xs" x="685" y="400" text-anchor="middle">signature</text>
+
+  <!-- 5 check -->
+  <text class="xs" x="552" y="455">checks the signature</text>
+  <text class="xs" x="552" y="471">against the public key</text>
+  <path class="ink" d="M520,447 h22 v26 h-22" marker-end="url(#fig3-arrow)"/>
+
+  <!-- 6 return -->
+  <line class="ink" x1="520" y1="520" x2="170" y2="520" marker-end="url(#fig3-arrow)"/>
+  <text class="xs" x="345" y="510" text-anchor="middle">signature after the check</text>
+
+  <!-- 7 next block -->
+  <text class="xs" x="190" y="570">good signature</text>
+  <text class="xs" x="190" y="586">node moves to the next block</text>
+  <path class="ink" d="M170,562 h-22 v28 h22" marker-end="url(#fig3-arrow)"/>
+
+  <!-- failure branch -->
+  <line class="dash" x1="850" y1="630" x2="170" y2="630" marker-end="url(#fig3-arrow-gray)"/>
+  <text class="xs" x="510" y="620" text-anchor="middle">no signature or a failed check</text>
+  <text class="xs ital" x="510" y="648" text-anchor="middle">the node does not move</text>
+
+  <!-- latency bracket -->
+  <line class="hair" x1="930" y1="305" x2="930" y2="410"/>
+  <line class="hair" x1="924" y1="305" x2="936" y2="305"/>
+  <line class="hair" x1="924" y1="410" x2="936" y2="410"/>
+  <text class="xs" x="942" y="344">latency</text>
+  <text class="xs" x="942" y="360">request →</text>
+  <text class="xs" x="942" y="374">signature</text>
+  <text class="xs ital" x="942" y="398">no measured</text>
+  <text class="xs ital" x="942" y="410">value</text>
+
+  <!-- log row -->
+  <text class="xs" x="170" y="692">The phone and the laptop append one row: height · round · step · latency · time.</text>
+
+  <line class="rule" x1="60" y1="748" x2="980" y2="748"/>
+  <text class="xs" x="60" y="766">The KMS console checks the signature before returning it. Latency is the time from the laptop request to the phone signature; this document gives no measured value.</text>
+</svg>

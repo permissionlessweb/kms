@@ -28,6 +28,7 @@ relaying and attestation.
 | Dial-out + automatic exponential-backoff reconnect | **Supported** |
 | `awskms` key backend (AWS KMS, Ed25519) | **Supported** |
 | libp2p transport (Noise) | **Supported**  |
+| `bluetooth` key backend (zafu cold signer; transport-independent) | **In progress** |
 | Account / raw-bytes / ECDSA signing | Planned |
 | ML-DSA-65 consensus signing (`file` backend, post-quantum) | **Supported** |
 | eth_secp256k1 key types | Planned |
@@ -224,6 +225,14 @@ using the AWS CLI:
 aws kms create-key --key-spec ECC_NIST_EDWARDS25519 --key-usage SIGN_VERIFY
 aws kms create-alias --alias-name alias/validator --target-key-id <key-id>
 ```
+
+## zcinti
+
+The console at `kms console` is the laptop side of the Bluetooth signer. The phone holds the consensus key. This process dials the node and asks the phone to sign. Takeoff, when the key is not yet a validator, is a separate section on that page. The design is [docs/zcinti.md](docs/zcinti.md). Open work is [docs/TODO.md](docs/TODO.md).
+
+![Four parts and one signature](docs/figures/fig1-four-parts-signature-path.svg)
+
+![One block](docs/figures/fig3-one-block-signing.svg)
 
 Example key (region pinned, credentials from an IAM role):
 

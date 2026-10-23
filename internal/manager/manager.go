@@ -39,6 +39,10 @@ type ValidatorConn struct {
 	// Dialer is the base (already transport-specific) SocketDialer. If nil, the
 	// manager builds the default tcp:// SecretConnection dialer from Addr.
 	Dialer privval.SocketDialer
+	// UseRequestChainID signs with the chain id on each privval request.
+	// The temporary node asks for its pubkey as morocco-1 and for block
+	// signatures as test-1. The live signer leaves this false.
+	UseRequestChainID bool
 }
 
 // Manager supervises one validator connection per ValidatorConn, dialing out and
@@ -127,14 +131,14 @@ func (m *Manager) handleConnection(conn net.Conn, c ValidatorConn, logger log.Lo
 		}
 	}()
 
-	m.serveConn(conn, c.ChainID, c.Signer, logger)
+	m.serveConn(conn, c, logger)
 }
 
 // serveConn reads validation requests off conn and answers them with the reused
 // privval.DefaultValidationRequestHandler, until any read/write error (EOF on a
 // graceful restart, or a read-deadline timeout on a silently dead peer) or until
 // stop. Returning signals the caller to redial.
-func (m *Manager) serveConn(conn net.Conn, chainID string, signer types.PrivValidator, logger log.Logger) {
+func (m *Manager) serveConn(conn net.Conn, c ValidatorConn, logger log.Logger) {
 	reader := protoio.NewDelimitedReader(conn, maxRemoteSignerMsgSize)
 	writer := protoio.NewDelimitedWriter(conn)
 
@@ -155,7 +159,7 @@ func (m *Manager) serveConn(conn net.Conn, chainID string, signer types.PrivVali
 			return
 		}
 
-		resp, err := privval.DefaultValidationRequestHandler(signer, req, chainID)
+		resp, err := privval.DefaultValidationRequestHandler(c.Signer, req, chainForRequest(c, req))
 		kind, kv, ping := describeRequest(req)
 		switch {
 		case err != nil:
@@ -178,6 +182,31 @@ func (m *Manager) serveConn(conn net.Conn, chainID string, signer types.PrivVali
 			return
 		}
 	}
+}
+
+// chainForRequest returns the chain id to enforce and to sign with.
+// The live signer always uses the configured id. The temporary node sends a
+// different id on the pubkey request than on the sign request, so that dial
+// follows the id in the request.
+func chainForRequest(c ValidatorConn, req privvalproto.Message) string {
+	if !c.UseRequestChainID {
+		return c.ChainID
+	}
+	switch r := req.Sum.(type) {
+	case *privvalproto.Message_PubKeyRequest:
+		if id := r.PubKeyRequest.GetChainId(); id != "" {
+			return id
+		}
+	case *privvalproto.Message_SignVoteRequest:
+		if id := r.SignVoteRequest.GetChainId(); id != "" {
+			return id
+		}
+	case *privvalproto.Message_SignProposalRequest:
+		if id := r.SignProposalRequest.GetChainId(); id != "" {
+			return id
+		}
+	}
+	return c.ChainID
 }
 
 // describeRequest returns a short kind, structured log keyvals, and whether the

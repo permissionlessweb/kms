@@ -40,6 +40,9 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{Use: "kms", Short: "External remote signer"}
 	root.PersistentFlags().StringVar(&home, "home", ".", "the home directory of kms")
 	root.AddCommand(versionCmd(), initCmd(), startCmd(), peerIDCmd(), stateCmd())
+	for _, extra := range rootExtra {
+		root.AddCommand(extra())
+	}
 	return root
 }
 

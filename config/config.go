@@ -43,9 +43,10 @@ type Validator struct {
 type Backend string
 
 const (
-	BackendFile   Backend = "file"
-	BackendPKCS11 Backend = "pkcs11"
-	BackendAWSKMS Backend = "awskms"
+	BackendFile      Backend = "file"
+	BackendPKCS11    Backend = "pkcs11"
+	BackendAWSKMS    Backend = "awskms"
+	BackendBluetooth Backend = "bluetooth"
 )
 
 // Algorithm names a signing key algorithm.
@@ -71,9 +72,16 @@ type Key struct {
 	Algorithm Algorithm `yaml:"algorithm"` // key algorithm; defaults to "ed25519"
 	KeyID     string    `yaml:"key_id"`    // pkcs11: hex CKA_ID; awskms: KMS id, ARN, or alias/<name>
 
-	FileConfig   `yaml:",inline"`
-	PKCS11Config `yaml:",inline"`
-	AWSKMSConfig `yaml:",inline"`
+	FileConfig      `yaml:",inline"`
+	PKCS11Config    `yaml:",inline"`
+	AWSKMSConfig    `yaml:",inline"`
+	BluetoothConfig `yaml:",inline"`
+}
+
+// BluetoothConfig names the paired zafu cold signer. The consensus key stays
+// on that device. This does not select the privval transport.
+type BluetoothConfig struct {
+	Peer string `yaml:"peer"`
 }
 
 // FileConfig configures the file backend: a key read from disk into memory.

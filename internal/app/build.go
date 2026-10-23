@@ -140,6 +140,8 @@ func newPrivvalSigner(k config.Key) (signing.Signer, error) {
 		return s, nil
 	case config.BackendPKCS11:
 		return openPKCS11(k.PKCS11Config, k.KeyID, k.Algorithm)
+	case config.BackendBluetooth:
+		return nil, fmt.Errorf("app: bluetooth peer %q is not linked to a zafu session in this process", k.Peer)
 	case config.BackendAWSKMS:
 		s, err := awskms.Open(context.Background(), awskms.Config{
 			KeyID:     k.KeyID,
