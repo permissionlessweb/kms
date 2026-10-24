@@ -228,7 +228,7 @@ aws kms create-alias --alias-name alias/validator --target-key-id <key-id>
 
 ## zcinti
 
-The console at `kms console` is the laptop side of the Bluetooth signer. The phone holds the consensus key. This process dials the node and asks the phone to sign. Takeoff, when the key is not yet a validator, is a separate section on that page. The design is [docs/zcinti.md](docs/zcinti.md). Open work is [docs/TODO.md](docs/TODO.md).
+The console at `kms console` is the laptop side of the Bluetooth signer. The phone holds the consensus key. This process dials the node and asks the phone to sign. Takeoff, when the key is not yet a validator, is a separate section on that page. The design is [docs/zcinti.md](docs/zcinti.md). The fork demo is [docs/stack.html](docs/stack.html). Open work is [docs/TODO.md](docs/TODO.md).
 
 ![Four parts and one signature](docs/figures/fig1-four-parts-signature-path.svg)
 

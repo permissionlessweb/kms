@@ -25,6 +25,7 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var lastReq: UInt64 = 0
     var inflight: UInt64 = 0
     var inflightAt = Date.distantPast
+    var sigReady = false
     var nextConnect = Date.distantPast
     var lastStatus = Date.distantPast
     let dir: URL = {
@@ -115,21 +116,14 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 emit(["event": "link", "value": "connecting"])
             }
         }
-        guard connected != nil, signChar != nil else { return }
-        // A phone that stopped signing never answers. Drop the link so the
-        // next Start on the phone is a new connection, not a stuck write.
+        guard connected != nil, signChar != nil, sigReady else { return }
+        // A lost reply must not drop the radio. The same request is sent again.
         if inflight != 0 {
-            if Date().timeIntervalSince(inflightAt) > 4 {
+            if Date().timeIntervalSince(inflightAt) > 8 {
                 inflight = 0
-                if let current = connected {
-                    central?.cancelPeripheralConnection(current)
-                }
-                connected = nil
-                signChar = nil
-                statusChar = nil
-                nextConnect = Date()
+            } else {
+                return
             }
-            return
         }
         if Date().timeIntervalSince(lastStatus) > 2, let granter = granterChar {
             connected?.readValue(for: granter)
@@ -175,6 +169,8 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         forget(peripheral)
+        inflight = 0
+        sigReady = false
         if connected == peripheral {
             connected = nil
             connectedCode = ""
@@ -212,6 +208,12 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             } else if ch.uuid == statusUUID {
                 statusChar = ch
             }
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        if characteristic.uuid == sigUUID, error == nil {
+            sigReady = true
         }
     }
 

@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zcinti · the Terp signer</title>
+<meta name="color-scheme" content="light dark">
+<style>
+  :root {
+    --wd-pearl-white-bg: #F7F4FF;
+    --wd-pearl-white-surface: #FCFBFF;
+    --wd-pearl-white-surfaceAlt: #EEE9FC;
+    --wd-pearl-white-text: #3E384A;
+    --wd-pearl-white-textMuted: #59516D;
+    --wd-pearl-white-border: #DAD6E8;
+    --wd-pearl-white-borderStrong: #CBC8D5;
+    --wd-pearl-white-accent: #776C91;
+    --wd-pearl-white-onAccent: #FFFFFF;
+    --wd-pearl-white-focus: #776C91;
+    --paper: #FAF9FD;
+    --spark: #A89DC5;
+    --spring: #6DB978;
+    --amber: #D49564;
+    --cyan: #6DB5A4;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --wd-pearl-white-bg: #100D18;
+      --wd-pearl-white-surface: #1B1824;
+      --wd-pearl-white-surfaceAlt: #2A2633;
+      --wd-pearl-white-text: #EDE9F8;
+      --wd-pearl-white-textMuted: #B7B3C4;
+      --wd-pearl-white-border: #373341;
+      --wd-pearl-white-borderStrong: #776C91;
+      --wd-pearl-white-accent: #CBC8D5;
+      --wd-pearl-white-onAccent: #211F28;
+      --wd-pearl-white-focus: #CBC8D5;
+      color-scheme: dark;
+    }
+  }
+  [data-theme="dark"] {
+    --wd-pearl-white-bg: #100D18;
+    --wd-pearl-white-surface: #1B1824;
+    --wd-pearl-white-surfaceAlt: #2A2633;
+    --wd-pearl-white-text: #EDE9F8;
+    --wd-pearl-white-textMuted: #B7B3C4;
+    --wd-pearl-white-border: #373341;
+    --wd-pearl-white-borderStrong: #776C91;
+    --wd-pearl-white-accent: #CBC8D5;
+    --wd-pearl-white-onAccent: #211F28;
+    --wd-pearl-white-focus: #CBC8D5;
+    color-scheme: dark;
+  }
+  [data-theme="light"] { color-scheme: light; }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--wd-pearl-white-bg);
+    color: var(--wd-pearl-white-text);
+    font: 16px/1.5 "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--wd-pearl-white-focus); outline-offset: 3px; }
+  header, main, footer { width: min(1080px, calc(100% - 32px)); margin: 0 auto; }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px 0 8px;
+  }
+  .mark {
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: var(--wd-pearl-white-textMuted);
+  }
+  h1 {
+    font-family: Palatino, "Palatino Linotype", "Iowan Old Style", Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(40px, 6vw, 68px);
+    line-height: .95;
+    letter-spacing: -0.03em;
+    margin: 8px 0 12px;
+  }
+  h2 {
+    font-family: Palatino, "Palatino Linotype", Georgia, serif;
+    font-weight: 500;
+    font-size: 28px;
+    margin: 0 0 8px;
+  }
+  .lede { max-width: 42rem; color: var(--wd-pearl-white-textMuted); font-size: 18px; }
+  button, .chip {
+    font: inherit;
+    border: 1px solid var(--wd-pearl-white-borderStrong);
+    background: transparent;
+    color: var(--wd-pearl-white-text);
+    border-radius: 999px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  button.solid {
+    background: var(--wd-pearl-white-accent);
+    color: var(--wd-pearl-white-onAccent);
+    border-color: transparent;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .grid { display: grid; gap: 14px; }
+  .three { grid-template-columns: repeat(3, 1fr); }
+  .two { grid-template-columns: 1.05fr .95fr; }
+  @media (max-width: 860px) {
+    .three, .two { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--wd-pearl-white-surface);
+    border: 1px solid var(--wd-pearl-white-border);
+    border-radius: 18px;
+    padding: 18px 18px 16px;
+  }
+  .card p { color: var(--wd-pearl-white-textMuted); margin: 8px 0 0; }
+  .kicker { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--spark); }
+  section { margin: 42px 0; }
+  figure {
+    margin: 0;
+    background: var(--paper);
+    border: 1px solid var(--wd-pearl-white-border);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  figure img, figure object { display: block; width: 100%; height: auto; }
+  figcaption { padding: 10px 14px 12px; color: #59516D; font-size: 13px; background: #FCFBFF; }
+  .swatches { display: flex; height: 28px; border-radius: 999px; overflow: hidden; border: 1px solid var(--wd-pearl-white-border); }
+  .swatches i { flex: 1; display: block; }
+  .phone, .console {
+    background: var(--wd-pearl-white-surface);
+    border: 1px solid var(--wd-pearl-white-borderStrong);
+    border-radius: 28px;
+    overflow: hidden;
+    min-height: 460px;
+  }
+  .chrome {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--wd-pearl-white-border);
+    color: var(--wd-pearl-white-textMuted);
+    font-size: 13px;
+  }
+  .tabs, .rail { display: flex; gap: 8px; padding: 12px 16px 0; }
+  .tabs button, .rail button { border-radius: 10px; }
+  .tabs button[aria-selected="true"], .rail button[aria-pressed="true"] {
+    background: var(--wd-pearl-white-accent);
+    color: var(--wd-pearl-white-onAccent);
+    border-color: transparent;
+  }
+  .sheet { padding: 8px 16px 18px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    text-align: left;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--wd-pearl-white-border);
+    font-variant-numeric: tabular-nums;
+  }
+  th { color: var(--wd-pearl-white-textMuted); font-weight: 500; width: 38%; }
+  .log {
+    max-height: 180px;
+    overflow: auto;
+    border: 1px solid var(--wd-pearl-white-border);
+    border-radius: 12px;
+  }
+  .log table { font-size: 13px; }
+  .log th { position: sticky; top: 0; background: var(--wd-pearl-white-surfaceAlt); }
+  .log td, .log th { padding: 6px 8px; text-align: right; }
+  .log td:first-child, .log th:first-child { text-align: left; }
+  .fold { border-top: 1px solid var(--wd-pearl-white-border); }
+  .fold p { margin: 0; padding: 0 16px 14px; color: var(--wd-pearl-white-textMuted); }
+  .hidden { display: none; }
+  .pill {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: var(--wd-pearl-white-surfaceAlt);
+    color: var(--wd-pearl-white-text);
+    font-size: 12px;
+  }
+  footer {
+    padding: 28px 0 48px;
+    color: var(--wd-pearl-white-textMuted);
+    font-size: 13px;
+  }
+  .links { display: flex; flex-wrap: wrap; gap: 14px; }
+  .links a { color: var(--wd-pearl-white-accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="mark">Terp · zcinti</div>
+  </div>
+  <button type="button" id="theme" class="chip">Dark</button>
+</header>
+<main>
+  <p class="mark">Fork demo</p>
+  <h1>The phone holds the key. The laptop asks.</h1>
+  <p class="lede">Three forks, one signer. Zigner keeps the consensus key. The KMS console dials the node and carries the block bytes. cw-orch-kms is the session the granter signs before any contract moves.</p>
+  <div class="row" style="margin-top:18px">
+    <a class="chip" href="https://github.com/permissionlessweb/zigner">Zigner</a>
+    <a class="chip" href="https://github.com/permissionlessweb/kms">KMS</a>
+    <a class="chip" href="https://github.com/permissionlessweb/cw-orchestrator">cw-orchestrator</a>
+  </div>
+  <div class="swatches" style="margin-top:22px" aria-hidden="true">
+    <i style="background:#FEFEFF"></i><i style="background:#FDFDFE"></i><i style="background:#FCFCFE"></i>
+    <i style="background:#FBFBFE"></i><i style="background:#FAF9FD"></i><i style="background:#D0CFD3"></i>
+    <i style="background:#A1A1A4"></i><i style="background:#A89DC5"></i><i style="background:#757578"></i>
+    <i style="background:#4C4C4E"></i><i style="background:#272628"></i><i style="background:#0A090B"></i>
+  </div>
+
+  <section>
+    <div class="grid three">
+      <article class="card">
+        <div class="kicker">Phone</div>
+        <h2>Zigner</h2>
+        <p>The Signer tab is a list of validators. Open one key and that key has Status, History, and Chain. Start and Stop arm the radio for that key. The consensus seed stays on the phone.</p>
+      </article>
+      <article class="card">
+        <div class="kicker">Laptop</div>
+        <h2>KMS</h2>
+        <p>The console dials the node. Signing is the open section once the key is a validator. Connect, create, and key export fold into one line until they are needed. Signatures scroll inside their own table.</p>
+      </article>
+      <article class="card">
+        <div class="kicker">Session</div>
+        <h2>cw-orch-kms</h2>
+        <p>The first document is the granter challenge: the key that signs it becomes the granter. The next document is an ordinary amino session grant. Gas is THIOL. Stake is TERP.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>The path of one signature</h2>
+    <p class="lede">The phone signs. The console checks. The node receives the signature. A file-backed signer stays on its own path.</p>
+    <div class="grid two" style="margin-top:16px">
+      <figure>
+        <img src="figures/fig1-four-parts-signature-path.svg" alt="Phone, scanner, KMS console, and temporary node, with the signature moving from the phone back to the node.">
+        <figcaption>Four parts. The consensus key does not leave the phone.</figcaption>
+      </figure>
+      <figure>
+        <img src="figures/fig3-one-block-signing.svg" alt="One block: the node asks, the console forwards the bytes, the phone signs, the console answers.">
+        <figcaption>One block. Height, round, and step travel with the bytes.</figcaption>
+      </figure>
+      <figure>
+        <img src="figures/fig2-phone-session-life.svg" alt="Start opens the radio. Stop closes it. Leaving the screen does not stop the signer.">
+        <figcaption>Start opens the radio. Stop closes it. The pin stays.</figcaption>
+      </figure>
+      <figure>
+        <img src="figures/fig4-signer-tab.svg" alt="The Signer tab, with height and latency for the last signature.">
+        <figcaption>The Signer tab reports height and the time to sign.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Try the two surfaces</h2>
+    <p class="lede">This is a picture of the product, on this page. The live console is the KMS process. The live key stays on the phone.</p>
+    <div class="grid two" style="margin-top:16px">
+      <div class="phone" id="phone">
+        <div class="chrome"><span>Zigner · Signer</span><span id="radio-pill" class="pill">Radio off</span></div>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" id="tab-status" aria-selected="true">Status</button>
+          <button type="button" role="tab" id="tab-history" aria-selected="false">History</button>
+          <button type="button" role="tab" id="tab-chain" aria-selected="false">Chain</button>
+        </div>
+        <div class="sheet" id="panel-status">
+          <table>
+            <tr><th>Network</th><td>Terp</td></tr>
+            <tr><th>Chain</th><td>the configured chain</td></tr>
+            <tr><th>Height</th><td id="phone-height">—</td></tr>
+            <tr><th>Role</th><td>Validator</td></tr>
+            <tr><th>Granter</th><td>the selected Terp account</td></tr>
+            <tr><th>Radio</th><td id="phone-radio">Off</td></tr>
+          </table>
+          <p style="margin-top:14px"><button type="button" class="solid" id="arm">Start this signer</button></p>
+          <p id="arm-note" style="color:var(--wd-pearl-white-textMuted)">Start opens the radio for this key. Stop closes it.</p>
+        </div>
+        <div class="sheet hidden" id="panel-history">
+          <div class="log">
+            <table>
+              <thead><tr><th>Height</th><th>Round</th><th>Step</th><th>Round trip</th></tr></thead>
+              <tbody id="hist"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="sheet hidden" id="panel-chain">
+          <p>Scan the chain QR from the console into this key. The set keeps its own consensus key.</p>
+        </div>
+      </div>
+
+      <div class="console" id="console">
+        <div class="chrome"><span>KMS console</span><span id="health" class="pill">Not signing</span></div>
+        <div class="rail">
+          <button type="button" data-pane="sign" aria-pressed="true">Sign</button>
+          <button type="button" data-pane="connect" aria-pressed="false">Connect</button>
+          <button type="button" data-pane="validator" aria-pressed="false">Validator</button>
+          <button type="button" data-pane="keys" aria-pressed="false">Keys</button>
+        </div>
+        <div class="sheet" id="pane-sign">
+          <p>The node asks. The phone signs. Recent signatures stay in this box.</p>
+          <div class="log">
+            <table>
+              <thead><tr><th>Height</th><th>Step</th><th>Round trip</th></tr></thead>
+              <tbody id="clog"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="sheet hidden" id="pane-connect"><p>The scanner finds the phone. Confirm the fingerprint once. After that, Start on the phone is enough to come back.</p></div>
+        <div class="sheet hidden" id="pane-validator">
+          <p><span class="pill">Manage</span> <span class="pill">Update</span> <span class="pill">Rewards</span> <span class="pill">Create again</span></p>
+          <p>Create is finished once the key is a validator. Manage shows the operator. Update and reward claim are the next messages. They do not broadcast from this page yet. Create again holds the grant.</p>
+        </div>
+        <div class="sheet hidden" id="pane-keys"><p>Import and recovery stay folded. A key leaves the phone only after the fingerprint on this page is typed on the phone.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the forks already do</h2>
+    <div class="grid three">
+      <article class="card"><div class="kicker">01</div><h2>A key page</h2><p>Each validator opens on its own. Status is a table of labels and values. History uses the theme type, and it scrolls inside the page.</p></article>
+      <article class="card"><div class="kicker">02</div><h2>A real session</h2><p>Votes travel inside a Noise session. The phone and the laptop each keep a pin. A missing pin refuses the next peer. The high-water mark keeps the vote and allows the extension beside it.</p></article>
+      <article class="card"><div class="kicker">03</div><h2>A quiet console</h2><p>Finished steps fold. Signing stays open. The fee on a grant is THIOL and is sized for create and the revoke that follows.</p></article>
+      <article class="card"><div class="kicker">04</div><h2>A granter</h2><p>The first cw-orch document is <span class="pill">cw-orch-granter:v1</span> plus one binding line. The phone signs those raw bytes. The amino session that follows stays a transaction card.</p></article>
+      <article class="card"><div class="kicker">05</div><h2>Bytes at rest</h2><p>The phone wraps consensus seeds with the keystore. The laptop identity is sealed outside the temporary directory. A recovery checks the secret and does not write it down.</p></article>
+      <article class="card"><div class="kicker">06</div><h2>Still ahead</h2><p>Stable USB, more than one platform, and more than one node. Penumbra and Zcash nodes. Mesh and threshold support for failover, geography, and shard rotation.</p></article>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="links">
+    <a href="zcinti.md">zcinti notes</a>
+    <a href="TODO.md">TODO</a>
+    <a href="https://github.com/permissionlessweb/zigner">permissionlessweb/zigner</a>
+    <a href="https://github.com/permissionlessweb/kms">permissionlessweb/kms</a>
+  </div>
+  <p>Pearl White · WD J1535+1247 · DZ · 5,680 K · the paper of this page.</p>
+</footer>
+<script>
+(function () {
+  var root = document.documentElement;
+  var key = "zcinti-theme";
+  var saved = localStorage.getItem(key);
+  if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  var btn = document.getElementById("theme");
+  function darkNow() {
+    var set = root.getAttribute("data-theme");
+    if (set === "dark") return true;
+    if (set === "light") return false;
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  function paintTheme() { btn.textContent = darkNow() ? "Light" : "Dark"; }
+  paintTheme();
+  btn.addEventListener("click", function () {
+    var next = darkNow() ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    localStorage.setItem(key, next);
+    paintTheme();
+  });
+
+  var armed = false;
+  var arm = document.getElementById("arm");
+  function paintArm() {
+    arm.textContent = armed ? "Stop this signer" : "Start this signer";
+    document.getElementById("phone-radio").textContent = armed ? "On" : "Off";
+    document.getElementById("radio-pill").textContent = armed ? "Radio on" : "Radio off";
+    document.getElementById("health").textContent = armed ? "Signing" : "Not signing";
+    document.getElementById("arm-note").textContent = armed
+      ? "This key is advertising. The console can ask it to sign."
+      : "Start opens the radio for this key. Stop closes it.";
+    document.getElementById("phone-height").textContent = armed ? "live" : "—";
+  }
+  arm.addEventListener("click", function () { armed = !armed; paintArm(); });
+
+  function selectTab(name) {
+    ["status", "history", "chain"].forEach(function (id) {
+      document.getElementById("tab-" + id).setAttribute("aria-selected", id === name ? "true" : "false");
+      document.getElementById("panel-" + id).classList.toggle("hidden", id !== name);
+    });
+  }
+  ["status", "history", "chain"].forEach(function (id) {
+    document.getElementById("tab-" + id).addEventListener("click", function () { selectTab(id); });
+  });
+
+  var rows = [
+    ["…391", "0", "prevote", "84 ms"],
+    ["…391", "0", "precommit", "91 ms"],
+    ["…390", "0", "precommit", "77 ms"]
+  ];
+  var hist = document.getElementById("hist");
+  var clog = document.getElementById("clog");
+  rows.forEach(function (r) {
+    var a = document.createElement("tr");
+    a.innerHTML = "<td>" + r[0] + "</td><td>" + r[1] + "</td><td>" + r[2] + "</td><td>" + r[3] + "</td>";
+    hist.appendChild(a);
+    var b = document.createElement("tr");
+    b.innerHTML = "<td>" + r[0] + "</td><td>" + r[2] + "</td><td>" + r[3] + "</td>";
+    clog.appendChild(b);
+  });
+
+  document.querySelectorAll(".rail button").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var name = button.getAttribute("data-pane");
+      document.querySelectorAll(".rail button").forEach(function (other) {
+        other.setAttribute("aria-pressed", other === button ? "true" : "false");
+      });
+      ["sign", "connect", "validator", "keys"].forEach(function (id) {
+        document.getElementById("pane-" + id).classList.toggle("hidden", id !== name);
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
