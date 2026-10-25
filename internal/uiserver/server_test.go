@@ -9,7 +9,7 @@ import (
 )
 
 func TestEnablePairAndSign(t *testing.T) {
-	s, err := New("127.0.0.1:0", "http://127.0.0.1:1")
+	s, err := New("127.0.0.1:0", "http://127.0.0.1:1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestEnablePairAndSign(t *testing.T) {
 	if res.StatusCode != 409 {
 		t.Fatalf("pair before radio: %s %s", res.Status, body)
 	}
-	page, err := http.Get(base + "/signer")
+	page, err := http.Get(base + "/")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,18 +5,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
-	"time"
 
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/ed25519"
-	"github.com/cometbft/cometbft/libs/log"
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	"github.com/cometbft/cometbft/types"
 	"github.com/spf13/cobra"
 
-	"github.com/cosmos/kms/internal/manager"
-	"github.com/cosmos/kms/internal/signer"
 	"github.com/cosmos/kms/internal/uiserver"
 	"github.com/cosmos/kms/signing/bluetooth"
 )
@@ -28,26 +21,67 @@ func init() {
 var rootExtra []func() *cobra.Command
 
 func consoleCmd() *cobra.Command {
-	var httpAddr, nodeURL, dial, chainID, stateFile, exportKey, granter string
+	var httpAddr, nodeURL, dial, chainID, granter string
+	var replace, readOnly bool
+	var configs []string
+	var engine, bleDir string
 	cmd := &cobra.Command{
 		Use:   "console",
 		Short: "Serve the Bluetooth signer page for the temporary test chain",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			srv, err := uiserver.New(httpAddr, nodeURL)
+			if bleDir != "" {
+				bluetooth.Dir = bleDir
+			}
+			if readOnly && engine != "" {
+				return fmt.Errorf("--read-only never runs the engine; drop --engine")
+			}
+			if !readOnly && engine == "" {
+				return fmt.Errorf("--engine is required (the single-chain console was removed); use --read-only to preview")
+			}
+			srv, err := uiserver.New(httpAddr, nodeURL, replace)
 			if err != nil {
 				return err
 			}
 			defer srv.Close()
+			srv.EnableToken()
+			srv.SetReadOnly(readOnly)
 			fmt.Printf("zcinti http://%s\ntemporary chain %s node %s\nlive Morocco KMS is not this process\n", srv.Addr(), chainID, nodeURL)
 			srv.SetChain(chainID)
-			if err := srv.SetExportKey(exportKey); err != nil {
-				fmt.Println("export key:", err)
-			}
 			srv.SetGranter(granter)
-			if err := srv.Resume(); err != nil {
-				fmt.Println("scanner:", err)
+			vals, err := consoleValidators(configs, nodeURL, dial, chainID)
+			if err != nil {
+				return err
 			}
-			go armDialer(dial, chainID, stateFile)
+			if engine != "" {
+				ev, err := consoleValidators([]string{engine}, nodeURL, dial, chainID)
+				if err != nil {
+					return err
+				}
+				vals = append(ev, vals...)
+			}
+			srv.SetValidators(vals)
+			if engine != "" {
+				// Console bookkeeping only, beside (not inside) the sign-state files.
+				if err := srv.SetOwnersPath(filepath.Join(filepath.Dir(engine), "state", "console", "owners.json")); err != nil {
+					fmt.Println("owners:", err)
+				}
+			}
+			switch {
+			case readOnly:
+				fmt.Println("read-only preview: no scanner, no privval dial, no broadcasts")
+				for _, v := range vals {
+					srv.SetEngine(v.Source, v.Slot, "read-only", "")
+				}
+			case engine != "":
+				if err := srv.Resume(); err != nil {
+					fmt.Println("scanner:", err)
+				}
+				go func() {
+					if _, err := runEngine(srv, engine); err != nil {
+						fmt.Println("engine:", err)
+					}
+				}()
+			}
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			<-sig
@@ -55,76 +89,41 @@ func consoleCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&httpAddr, "http", "127.0.0.1:8791", "console listen address")
-	cmd.Flags().StringVar(&nodeURL, "node", "http://127.0.0.1:26757", "RPC of the temporary test node")
+	cmd.Flags().StringVar(&nodeURL, "node", "http://127.0.0.1:27657", "RPC of the temporary test node")
 	cmd.Flags().StringVar(&dial, "dial", "tcp://127.0.0.1:27159", "privval listener of the temporary test node")
 	cmd.Flags().StringVar(&chainID, "chain-id", "morocco-1", "chain id the temporary node sends on its privval socket")
-	cmd.Flags().StringVar(&stateFile, "state", "/tmp/kms-ble-console/state.json", "double-sign floor for the temporary chain")
-	cmd.Flags().StringVar(&exportKey, "export-key", "", "consensus key file this console may send to the phone over Noise")
 	cmd.Flags().StringVar(&granter, "granter", "", "offline account that signs the authz and feegrant for takeoff")
+	cmd.Flags().StringArrayVar(&configs, "config", nil, "kms config file whose validators the console lists (repeatable; one file per kms instance)")
+	cmd.Flags().BoolVar(&replace, "replace", false, "stop a stale console that already serves --http (SIGTERM) before binding")
+	cmd.Flags().StringVar(&engine, "engine", "", "kms config this console serves itself: every validator in it signs through one shared phone link ")
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "preview: list and plan only; no scanner, no privval dial, no grants or broadcasts")
+	cmd.Flags().StringVar(&bleDir, "ble-dir", "", "Bluetooth link directory (default /tmp/kms-ble)")
 	return cmd
 }
 
-// hrsPV stamps the height onto the phone request, then lets FilePV sign.
-type hrsPV struct {
-	inner types.PrivValidator
-	link  *bluetooth.Link
-}
-
-func (p *hrsPV) GetPubKey() (crypto.PubKey, error) { return p.inner.GetPubKey() }
-
-func (p *hrsPV) SignVote(chainID string, vote *cmtproto.Vote) error {
-	step := uint8(2)
-	if vote.Type == cmtproto.PrecommitType {
-		step = 3
+// consoleValidators lists the validators from each --config file. With none,
+// the flag-driven phone validator is the only entry, as before.
+func consoleValidators(configs []string, nodeURL, dial, chainID string) ([]uiserver.ValidatorView, error) {
+	self := uiserver.ValidatorView{Name: "console", Source: "flags", ChainID: chainID, Privval: dial, RPC: strings.TrimRight(nodeURL, "/"), Signer: "phone"}
+	if len(configs) == 0 {
+		return []uiserver.ValidatorView{self}, nil
 	}
-	p.link.SetHRS(uint64(vote.Height), uint32(vote.Round), step)
-	return p.inner.SignVote(chainID, vote)
-}
-
-func (p *hrsPV) SignProposal(chainID string, proposal *cmtproto.Proposal) error {
-	p.link.SetHRS(uint64(proposal.Height), uint32(proposal.Round), 1)
-	return p.inner.SignProposal(chainID, proposal)
-}
-
-// armDialer waits until the cutover marker, the phone public key, and the
-// sign-state file are all present, then dials the temporary node.
-func armDialer(dial, chainID, stateFile string) {
-	link := bluetooth.DefaultLink()
-	for {
-		if _, err := os.Stat(filepath.Join(bluetooth.Dir, "arm")); err != nil {
-			time.Sleep(300 * time.Millisecond)
-			continue
-		}
-		pub, err := link.PubKey()
-		if err != nil || len(pub) != 32 {
-			time.Sleep(300 * time.Millisecond)
-			continue
-		}
-		if _, err := os.Stat(stateFile); err != nil {
-			fmt.Println("waiting for temporary-chain sign state", stateFile)
-			time.Sleep(300 * time.Millisecond)
-			continue
-		}
-		cs, err := signer.NewChainSigner(chainID, bluetooth.Phone{L: link}, stateFile, false)
+	var out []uiserver.ValidatorView
+	seen := false
+	for _, p := range configs {
+		vs, err := uiserver.ValidatorsFromConfig(p)
 		if err != nil {
-			fmt.Println("temporary chain signer:", err)
-			time.Sleep(time.Second)
-			continue
+			return nil, err
 		}
-		logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
-		mgr := manager.New(logger, []manager.ValidatorConn{{
-			ChainID:           chainID,
-			Addr:              dial,
-			IdentityKey:       ed25519.GenPrivKey(),
-			Signer:            &hrsPV{inner: cs, link: link},
-			Reconnect:         true,
-			UseRequestChainID: true,
-		}})
-		if err := mgr.Start(); err != nil {
-			fmt.Println("dialer:", err)
-			return
+		for _, v := range vs {
+			if v.Privval == dial {
+				seen = true
+			}
 		}
-		fmt.Printf("dialing temporary chain %s at %s\n", chainID, dial)
-		return
+		out = append(out, vs...)
 	}
+	if !seen {
+		out = append([]uiserver.ValidatorView{self}, out...)
+	}
+	return out, nil
 }
