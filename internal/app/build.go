@@ -9,6 +9,8 @@ import (
 	"net"
 
 	"github.com/cometbft/cometbft/libs/log"
+	"github.com/cometbft/cometbft/privval"
+	"github.com/cometbft/cometbft/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -32,6 +34,25 @@ import (
 // be called on shutdown. cleanup is non-nil even when an error is returned, so
 // callers can always defer it.
 func Build(c *config.Config, allowFresh []string, logger log.Logger) (mgr *manager.Manager, cleanup func(), err error) {
+	return BuildWith(c, allowFresh, logger, Options{})
+}
+
+// Options lets an embedding process (the console) supply signers that only it
+// can build, such as phone keys on a shared Bluetooth link.
+type Options struct {
+	// Signer, when set, is asked first for every key. ok=false falls back to
+	// the built-in backends.
+	Signer func(k config.Key) (s signing.Signer, ok bool, err error)
+	// Wrap, when set, wraps each slot's double-sign-protected signer, e.g. to
+	// stamp height/round/step for a phone before it signs.
+	Wrap func(slot string, k config.Key, pv types.PrivValidator) types.PrivValidator
+	// Dial, when set, replaces the dialer of each validator connection.
+	Dial func(v config.Validator) privval.SocketDialer
+}
+
+// BuildWith is Build with embedding hooks. Each chain slot keeps its own
+// sign-state file; a slot's network id is what votes are signed for.
+func BuildWith(c *config.Config, allowFresh []string, logger log.Logger, opts Options) (mgr *manager.Manager, cleanup func(), err error) {
 	// Signers that hold OS/HSM resources are closed by cleanup.
 	var closers []io.Closer
 	cleanup = func() {
@@ -48,8 +69,17 @@ func Build(c *config.Config, allowFresh []string, logger log.Logger) (mgr *manag
 
 	// chainID -> key signer (one signer per chain).
 	keySigners := map[string]signing.Signer{}
+	keyOf := map[string]config.Key{}
 	for _, k := range c.Keys {
-		s, berr := newPrivvalSigner(k)
+		var s signing.Signer
+		var berr error
+		handled := false
+		if opts.Signer != nil {
+			s, handled, berr = opts.Signer(k)
+		}
+		if !handled && berr == nil {
+			s, berr = newPrivvalSigner(k)
+		}
 		if berr != nil {
 			return nil, cleanup, berr
 		}
@@ -59,13 +89,16 @@ func Build(c *config.Config, allowFresh []string, logger log.Logger) (mgr *manag
 				return nil, cleanup, fmt.Errorf("app: multiple signers bound to chain %q", id)
 			}
 			keySigners[id] = s
+			keyOf[id] = k
 		}
 	}
 
 	// chainID -> state file.
 	stateFiles := map[string]string{}
+	network := map[string]string{}
 	for _, ch := range c.Chains {
 		stateFiles[ch.ID] = ch.StateFile
+		network[ch.ID] = ch.NetworkID()
 	}
 
 	// A typo'd --allow-fresh-state would silently waive nothing; reject it.
@@ -78,16 +111,20 @@ func Build(c *config.Config, allowFresh []string, logger log.Logger) (mgr *manag
 	}
 
 	// chainID -> *ChainSigner.
-	signers := map[string]*signer.ChainSigner{}
+	signers := map[string]types.PrivValidator{}
 	for id, ks := range keySigners {
 		if fresh[id] {
 			logger.Info("starting with fresh sign state at height 0 (--allow-fresh-state)", "chain", id, "state_file", stateFiles[id])
 		}
-		cs, cerr := signer.NewChainSigner(id, ks, stateFiles[id], fresh[id])
+		cs, cerr := signer.NewChainSigner(network[id], ks, stateFiles[id], fresh[id])
 		if cerr != nil {
 			return nil, cleanup, cerr
 		}
-		signers[id] = cs
+		var pv types.PrivValidator = cs
+		if opts.Wrap != nil {
+			pv = opts.Wrap(id, keyOf[id], cs)
+		}
+		signers[id] = pv
 	}
 
 	// One ValidatorConn per validator entry; validators of a chain share its signer.
@@ -106,7 +143,7 @@ func Build(c *config.Config, allowFresh []string, logger log.Logger) (mgr *manag
 			return nil, cleanup, perr
 		}
 		vc := manager.ValidatorConn{
-			ChainID:     v.ChainID,
+			ChainID:     network[v.ChainID],
 			Addr:        v.Addr,
 			IdentityKey: idKey,
 			Signer:      cs,
@@ -118,6 +155,11 @@ func Build(c *config.Config, allowFresh []string, logger log.Logger) (mgr *manag
 				return nil, cleanup, derr
 			}
 			vc.Dialer = d
+		}
+		if opts.Dial != nil {
+			if d := opts.Dial(v); d != nil {
+				vc.Dialer = d
+			}
 		}
 		conns = append(conns, vc)
 	}

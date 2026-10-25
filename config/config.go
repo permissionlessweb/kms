@@ -29,6 +29,19 @@ type Config struct {
 type Chain struct {
 	ID        string `yaml:"id"`
 	StateFile string `yaml:"state_file"` // optional; defaulted by Validate
+	// Network is the on-chain chain id when ID is a local slot name, so one
+	// engine can run several keys (each with its own sign-state) on the same
+	// chain, e.g. id "morocco-1/zcinti2" with network "morocco-1".
+	// Empty means ID is the chain id.
+	Network string `yaml:"network,omitempty"`
+}
+
+// NetworkID is the chain id signed into votes for this slot.
+func (c Chain) NetworkID() string {
+	if c.Network != "" {
+		return c.Network
+	}
+	return c.ID
 }
 
 // Validator declares one outbound connection to a validator's listener.
@@ -37,6 +50,10 @@ type Validator struct {
 	Addr        string `yaml:"addr"`         // tcp://host:port
 	IdentityKey string `yaml:"identity_key"` // ed25519 node-key file for SecretConnection
 	Reconnect   *bool  `yaml:"reconnect"`    // default true
+	// Name and RPC are optional and only read by `kms console` to list and
+	// probe this validator; `kms start` ignores them.
+	Name string `yaml:"name"`
+	RPC  string `yaml:"rpc"`
 }
 
 // Backend identifies which key custodian a Key uses.
