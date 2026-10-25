@@ -68,3 +68,9 @@ func bytesEqual(a, b []byte) bool {
 	}
 	return true
 }
+
+func verifyAmino(pub, sig, amino []byte) bool {
+	return secp256k1.PubKey(pub).VerifySignature(amino, sig)
+}
+
+func secpAddr(pub []byte) []byte { return secp256k1.PubKey(pub).Address() }
