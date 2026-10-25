@@ -190,42 +190,10 @@ func broadcastMessages(ctx context.Context, rpc, chainID, denom, granter string,
 // BroadcastAmino posts the grant the phone signed in Zigner's account scan.
 // The signature is over the amino JSON, not a proto sign doc.
 func BroadcastAmino(ctx context.Context, rpc, chainID string, account, sequence uint64, pub, sig, amino []byte, msgs []*anypb.Any) (string, error) {
-	normalized, _, err := MatchAuthorization(pub, sig, amino)
+	wire, err := SignedTx(Prepared{Amino: amino, Msgs: msgs, Account: account, Sequence: sequence}, pub, sig)
 	if err != nil {
 		return "", err
 	}
-	sig = normalized
-	body := &tx.TxBody{Messages: msgs, Memo: "cw-orch-session:v1"}
-	bodyBytes, err := proto.Marshal(body)
-	if err != nil {
-		return "", err
-	}
-	secpAny, err := anypb.New(&secp.PubKey{Key: pub})
-	if err != nil {
-		return "", err
-	}
-	secpAny.TypeUrl = secpURL
-	authInfo := &tx.AuthInfo{
-		SignerInfos: []*tx.SignerInfo{{
-			PublicKey: secpAny,
-			ModeInfo:  &tx.ModeInfo{Sum: &tx.ModeInfo_Single_{Single: &tx.ModeInfo_Single{Mode: signing.SignMode_SIGN_MODE_LEGACY_AMINO_JSON}}},
-			Sequence:  sequence,
-		}},
-		Fee: &tx.Fee{
-			Amount:   []*base.Coin{{Denom: feeDenom, Amount: AminoFee()}},
-			GasLimit: 800000,
-		},
-	}
-	authBytes, err := proto.Marshal(authInfo)
-	if err != nil {
-		return "", err
-	}
-	raw := &tx.TxRaw{BodyBytes: bodyBytes, AuthInfoBytes: authBytes, Signatures: [][]byte{sig}}
-	wire, err := proto.Marshal(raw)
-	if err != nil {
-		return "", err
-	}
-	_ = account
 	_ = chainID
 	return broadcast(ctx, rpc, wire)
 }

@@ -55,6 +55,10 @@ type Prepared struct {
 	Grantee  string
 	Account  uint64
 	Sequence uint64
+	// Memo, Fee (uthiol) and Gas of the sign doc; empty means the session grant defaults.
+	Memo string
+	Fee  string
+	Gas  uint64
 }
 
 // ID is the short hash of the exact bytes the phone signs.
