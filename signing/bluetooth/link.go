@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cosmos/kms/config"
@@ -18,7 +20,7 @@ import (
 
 // Dir is the laptop-side drop between the console and the Bluetooth scanner.
 // It holds pairing and sign files, never a copy of the consensus private key.
-const Dir = "/tmp/kms-ble"
+var Dir = "/tmp/kms-ble"
 
 // SignRecord is one signature the phone returned.
 type SignRecord struct {
@@ -43,6 +45,10 @@ type Link struct {
 		s uint8
 	}
 	signs []SignRecord
+	// handshaking is set while a background Noise handshake runs. Votes
+	// never wait on it: consensus must not stall behind a slow radio.
+	handshaking atomic.Bool
+	lastHSErr   atomic.Value // string
 }
 
 // Open prepares dir and returns a link that reads and writes files there.
@@ -106,6 +112,8 @@ type signReq struct {
 type signResp struct {
 	ID  uint64 `json:"id"`
 	Sig string `json:"sig"`
+	// Reason is optional free text the bridge adds to a refusal.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Sign blocks until the phone returns an Ed25519 signature over msg, or four
@@ -114,7 +122,7 @@ func (l *Link) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	if len(msg) == 0 {
 		return nil, errors.New("bluetooth: empty sign bytes")
 	}
-	if err := l.ensureSession(ctx); err != nil {
+	if err := l.readySession(); err != nil {
 		return nil, err
 	}
 	l.mu.Lock()
@@ -134,7 +142,7 @@ func (l *Link) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 		return nil, err
 	}
 	start := time.Now()
-	deadline := time.Now().Add(3500 * time.Millisecond)
+	deadline := time.Now().Add(voteWait)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -160,8 +168,8 @@ func (l *Link) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(rawSig) == 1 && rawSig[0] == wireRefuse {
-			return nil, errors.New("bluetooth: phone refused a repeated or lower height")
+		if err := parseRefusal(rawSig, resp.Reason, "", h, r, s); err != nil {
+			return nil, err
 		}
 		if len(rawSig) == 0 || rawSig[0] != wireSig {
 			return nil, errors.New("bluetooth: phone signature was not sealed")
@@ -200,8 +208,74 @@ func (l *Link) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	}
 }
 
+// Answer windows. The scanner holds one frame in flight for up to 8s
+// before it forwards the next req.json, so a handshake that gives up
+// sooner keeps replacing its own hello while the phone's late reply is
+// filed under an id the console has already abandoned. On 2026-10-24 a
+// weak link (RSSI -80..-87) trapped the console in that loop for ~6 min
+// (99 missed blocks) until the radio reconnected. Handshake frames wait
+// past the scanner's hold so the reply that arrives is the one awaited.
+//
+// Votes are decoupled from that window. A vote is sent only on a live
+// session and waits at most voteWait; with no session it is refused at once
+// (ErrPhoneNotReady) while a handshake runs in the background. On
+// 2026-10-24 22:45 UTC a vote that waited on the 9s handshake blocked the
+// node's consensus loop, so the node stopped applying blocks.
+var (
+	exchangeWait  = 3500 * time.Millisecond
+	handshakeWait = 9 * time.Second
+	voteWait      = 2 * time.Second
+)
+
+// ErrPhoneNotReady refuses a vote immediately because no phone session is up.
+var ErrPhoneNotReady = errors.New("bluetooth: phone link not ready; vote refused without waiting")
+
+// readySession never blocks on the radio. With a live session it returns
+// nil; otherwise it starts one background handshake (if none is running)
+// and refuses the vote.
+func (l *Link) readySession() error {
+	if !l.handshaking.Load() {
+		l.sessMu.Lock()
+		up := l.sess != nil
+		l.sessMu.Unlock()
+		if up {
+			return nil
+		}
+		if l.handshaking.CompareAndSwap(false, true) {
+			go func() {
+				defer l.handshaking.Store(false)
+				ctx, cancel := context.WithTimeout(context.Background(), 2*handshakeWait+time.Second)
+				defer cancel()
+				if err := l.ensureSession(ctx); err != nil {
+					l.lastHSErr.Store(err.Error())
+				} else {
+					l.lastHSErr.Store("")
+				}
+			}()
+		}
+	}
+	if e, _ := l.lastHSErr.Load().(string); e != "" {
+		return fmt.Errorf("%w (last handshake: %s)", ErrPhoneNotReady, e)
+	}
+	return ErrPhoneNotReady
+}
+
+// SessionUp reports whether votes can be sent now.
+func (l *Link) SessionUp() bool {
+	if l.handshaking.Load() {
+		return false
+	}
+	l.sessMu.Lock()
+	defer l.sessMu.Unlock()
+	return l.sess != nil
+}
+
 // Exchange sends one radio frame and returns the phone's notify bytes.
 func (l *Link) Exchange(ctx context.Context, frame []byte) ([]byte, error) {
+	return l.exchangeWithin(ctx, frame, exchangeWait)
+}
+
+func (l *Link) exchangeWithin(ctx context.Context, frame []byte, wait time.Duration) ([]byte, error) {
 	l.mu.Lock()
 	id := l.next
 	l.next++
@@ -209,7 +283,7 @@ func (l *Link) Exchange(ctx context.Context, frame []byte) ([]byte, error) {
 	if err := writeJSON(filepath.Join(l.dir, "req.json"), signReq{ID: id, Frame: base64.StdEncoding.EncodeToString(frame)}); err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(3500 * time.Millisecond)
+	deadline := time.Now().Add(wait)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -292,7 +366,7 @@ func (l *Link) ensureSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	reply, err := l.Exchange(ctx, append([]byte{wireHello}, msg1...))
+	reply, err := l.exchangeWithin(ctx, append([]byte{wireHello}, msg1...), handshakeWait)
 	if err != nil {
 		return err
 	}
@@ -309,7 +383,7 @@ func (l *Link) ensureSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ack, err := l.Exchange(ctx, append([]byte{wireFinish}, msg3...))
+	ack, err := l.exchangeWithin(ctx, append([]byte{wireFinish}, msg3...), handshakeWait)
 	if err != nil {
 		return err
 	}

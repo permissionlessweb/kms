@@ -34,6 +34,7 @@ func TestLinkWaitsForPhone(t *testing.T) {
 	done := make(chan struct{})
 	defer close(done)
 	go serveSealedPhone(t, dir, priv, pub, done)
+	waitUp(t, link)
 	link.SetHRS(9, 1, 3)
 	sig, err := link.Sign(context.Background(), []byte("block-bytes"))
 	if err != nil {
