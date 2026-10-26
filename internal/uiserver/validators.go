@@ -64,6 +64,8 @@ type ValidatorView struct {
 	PhonePub    string   `json:"phone_pub,omitempty"` // ed25519 consensus pubkey (public)
 	OnChain     *OnChain `json:"onchain,omitempty"`
 	Owner       *Owner   `json:"owner,omitempty"`
+	// OwnerDerived is the account address re-encoded from OnChain.Valoper.
+	OwnerDerived string `json:"owner_derived,omitempty"`
 }
 
 type validatorSet struct {

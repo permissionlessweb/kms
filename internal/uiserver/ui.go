@@ -99,6 +99,16 @@ main{max-width:1180px;margin:0 auto;padding:var(--space-5)}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:var(--radius-pill);font-size:var(--fs-xs);font-weight:600;letter-spacing:.02em;background:var(--surface-2);color:var(--muted);border:1px solid var(--border)}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.9}
 .pill.ok::before{background:var(--dot-ok)}.pill.warn::before{background:var(--dot-warn)}.pill.info::before{background:var(--dot-info)}.pill.danger::before{background:var(--dot-danger)}
+.dv-top{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-2)}
+.layout{display:grid;grid-template-columns:minmax(260px,320px) 1fr;gap:var(--space-4);align-items:start}.layout>aside{position:sticky;top:var(--space-3)}.layout>aside .card{margin:0}.layout>aside .dv-grid{grid-template-columns:1fr}.lh{font:600 var(--fs-xs)/1 var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0}.icon-btn{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:999px;width:30px;height:30px;cursor:pointer;margin-left:auto}.icon-btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-text)}
+@media(max-width:860px){.layout{grid-template-columns:1fr}.layout>aside{position:static}}
+.dv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:var(--space-3);margin:var(--space-3) 0}
+.dv{border:1px solid var(--border);border-radius:12px;padding:var(--space-3);display:flex;flex-direction:column;gap:6px;background:var(--surface-2)}
+.dv.ok{border-color:var(--ok)}.dv.danger{opacity:.8}
+.dv-h{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.dv-r{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;font-size:var(--fs-sm)}
+.dv-i{display:inline-flex;align-items:baseline;gap:3px;letter-spacing:-1px}.dv-i small{letter-spacing:0;color:var(--muted)}
+.dv-add{margin:var(--space-2) 0}
 .pill.plain::before{display:none}
 .pill.ok{background:var(--ok-weak);color:var(--ok);border-color:transparent}
 .pill.warn{background:var(--warn-weak);color:var(--warn);border-color:transparent}
@@ -186,6 +196,7 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--surface-2)}
 <nav class="tabs" role="tablist" id="tabs"></nav>
 <main id="view"></main>
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/move.js"></script>
 <script>
 (function(){
 "use strict";
@@ -193,10 +204,13 @@ var RO=(document.querySelector('meta[name=kms-mode]')||{}).content==="read-only"
 var S={vals:[],phone:null,tab:sessionStorage.getItem("tab")||"overview",act:"delegate",owners:{},hold:{},createDraft:{},review:{},grant:{},result:{},errs:{},flow:{},sig:{}};
 // Owner is per validator slot and lives on the server (/api/owners), never in
 // browser storage: switching tabs switches owner, clearing touches one slot.
-Object.defineProperty(S,"granter",{get:function(){var o=S.owners[S.tab];return o&&o.granter||""}});
+// A saved owner wins; otherwise the owner re-encoded from the on-chain valoper.
+function derivedOwner(id){var v=(S.vals||[]).filter(function(x){return x.id===id})[0];return v&&v.owner_derived||""}
+Object.defineProperty(S,"granter",{get:function(){var o=S.owners[S.tab];return o&&o.granter||derivedOwner(S.tab)}});
 function ownerPost(body){body.id=S.tab;return api("/api/owners",body).then(function(r){if(body.clear)delete S.owners[body.id];else S.owners[body.id]=r.owner;delete S.hold[body.id];return r})}
 function loadOwners(){return api("/api/owners").then(function(d){S.owners=d.owners||{}}).catch(function(){})}
-function notValidator(v){return !!(v&&v.onchain&&v.onchain.checked&&!v.onchain.found)}
+function halted(v){return !!(v&&v.lag_ms>30000)}
+function notValidator(v){return !!(v&&v.onchain&&v.onchain.checked&&!v.onchain.found&&!v.onchain.error&&!halted(v))}
 function actOf(v){return notValidator(v)?"create":(S.act==="create"?"delegate":S.act)}
 function vname(v){return v.display_name||v.name}
 function $(q,el){return (el||document).querySelector(q)}
@@ -230,26 +244,39 @@ function headerPills(){var serving=S.vals.filter(function(v){return /serving/.te
   if(p.healthy){pp.className="pill ok live";pp.textContent="phone linked"}else if(p.paired){pp.className="pill warn";pp.textContent="phone paired, idle"}else if(p.bluetooth){pp.className="pill info";pp.textContent="scanning"}else{pp.className="pill";pp.textContent="phone off"}}
 function overview(){if(!S.vals.length)return '<div class="card empty"><div class="icon">⌁</div><h2>No validators configured</h2><p>Start the console with <code>--config kms.yaml</code>. Each validator entry gets a tab; each chain slot keeps its own double-sign state.</p></div>';
   var rows=S.vals.map(function(v){return '<tr class="click" data-open="'+esc(v.id)+'"><td><b>'+esc(vname(v))+'</b>'+onchainTag(v)+'<br><small class="mono">'+esc(v.slot)+'</small></td><td>'+esc(v.chain_id)+'</td><td>'+statusPill(v)+' '+jailPill(v)+'</td><td>'+enginePill(v)+'</td><td>'+esc(v.signer)+(v.key_id?' <small class="mono">'+esc(v.key_id)+'</small>':'')+'</td><td class="mono">'+esc(v.height||"—")+'</td><td class="mono">'+esc(v.privval)+'</td></tr>'}).join("");
-  return '<div class="grid"><section class="card"><h2>Validators</h2><p class="sub">One engine, one signer connection per validator, one sign-state per slot. Click a row to open its tab.</p><table><thead><tr><th>Validator</th><th>Chain</th><th>Node</th><th>Engine</th><th>Signer</th><th>Height</th><th>Privval</th></tr></thead><tbody>'+rows+'</tbody></table></section>'+pairCard()+'</div>'}
+  return '<div class="grid"><section class="card"><h2>Validators</h2><p class="sub">One engine, one signer connection per validator, one sign-state per slot. Click a row to open its tab.</p><table><thead><tr><th>Validator</th><th>Chain</th><th>Node</th><th>Engine</th><th>Signer</th><th>Height</th><th>Privval</th></tr></thead><tbody>'+rows+'</tbody></table></section></div>'}
 function step(list,curIdx,err){return '<ol class="stepper">'+list.map(function(s,i){var c=i<curIdx?"done":i===curIdx?(err?"current error":"current"):"";return '<li class="'+c+'">'+esc(s[0])+'<small>'+esc(s[1])+'</small></li>'}).join("")+'</ol>'}
 function btn(label,attrs,disabledWhy,kind){var d=disabledWhy?' disabled title="'+esc(disabledWhy)+'"':'';return '<button class="btn '+(kind||"")+'" '+attrs+d+'>'+esc(label)+(disabledWhy?' <span class="why">· '+esc(disabledWhy)+'</span>':'')+'</button>'}
-function pairCard(){var p=S.phone||{};var idx=!p.bluetooth?0:!p.paired?1:!p.phone_pinned?2:p.healthy?4:3;
-  var nexts=["Turn on Bluetooth so the console can find the phone.","Pick the code the phone shows. Reject any code you do not see on your phone.","Confirm the phone's Noise fingerprint matches the one on the phone.","Waiting for the phone to open a sealed session.","Phone linked. Signing requests go over the sealed session."];
-  var codes=Object.keys(p.seen||{});
-  var body='';
-  var pairQR=(!p.paired&&S.vals.length)?'<div class="qr" style="margin-top:12px"><img alt="Pairing QR" width="160" height="160" src="/slot-qr.png?pair=1"><p class="sub" style="max-width:420px">Pairing QR — only for linking the phone the first time. To add a validator\'s key, use that validator\'s own tab.</p></div>':'';
-  if(idx===0)body=btn("Turn on Bluetooth",'data-do="bt-on"',RO?"read-only":"", "primary");
-  else if(idx===1)body=codes.length?'<div class="codes">'+codes.map(function(c){return '<button class="code" data-pair="'+esc(c)+'"'+(RO?' disabled':'')+'>'+esc(c)+'<small>rssi '+esc(p.seen[c])+'</small></button>'}).join("")+'</div>':'<div class="empty" style="padding:16px"><div class="skeleton" style="width:60%;margin:0 auto 8px"></div>Looking for phones… open KMS on the phone.</div>';
-  else if(idx===2)body=p.phone_pending?'<dl class="kv"><dt>Phone fingerprint</dt><dd class="mono">'+esc(p.phone_pending)+'</dd><dt>This console</dt><dd class="mono">'+esc(p.kms_fingerprint||"—")+'</dd></dl><div class="row" style="margin-top:12px">'+btn("Fingerprints match",'data-do="pin"',RO?"read-only":"","primary")+btn("Reject",'data-do="reject"',RO?"read-only":"","danger")+'</div>':'<p class="sub">Waiting for the phone to introduce itself.</p>';
-  else body='<dl class="kv"><dt>Link</dt><dd>'+esc(p.link||p.radio)+'</dd><dt>Chosen</dt><dd class="mono">'+esc(p.chosen||"—")+'</dd><dt>Console fingerprint</dt><dd class="mono">'+esc(p.kms_fingerprint||"—")+'</dd></dl>'+(p.bluetooth?'<div class="row" style="margin-top:12px">'+btn("Turn off Bluetooth",'data-do="bt-off"',RO?"read-only":"","ghost")+'</div>':'');
-  return '<section class="card span-12"><h2>Phone link</h2><p class="sub">One sealed Bluetooth session carries every phone-held key; each request names its key id.</p>'+step([["Bluetooth","radio on"],["Pair","pick code"],["Verify","fingerprint"],["Session","sealed"],["Linked","signing"]],idx,!!p.error)+'<div class="next '+(idx===4?"ok":"")+'">'+(idx===4?"✓ ":"→ ")+esc(nexts[idx])+'</div>'+(p.error?'<div class="next danger">'+esc(p.error)+'</div>':'')+body+pairQR+'</section>'}
-function onchainTag(v){var o=v.onchain;if(!o||!o.checked)return "";if(!o.found)return ' <span class="pill warn plain">not a validator yet</span>';return ' <small class="sub">on-chain “'+esc(o.moniker)+'”</small>'}
+function rssiBars(r){if(r==null)return '<span class="dv-i" title="signal unknown">▁</span>';var n=r>-60?4:r>-70?3:r>-80?2:1;return '<span class="dv-i" title="RSSI '+r+' dBm">'+"▁▃▅▇".slice(0,n)+'<small>'+r+'</small></span>'}
+function devCard(d){var st={up:["ok","●","sealed"],connecting:["warn","◌","dialing"],down:["danger","○","down"],pending:["info","◈","verify"],standby:["info","◇","member · no slot"]}[d.link]||["","○",d.link];
+  var slots=(d.slots||[]).map(function(x){return '<span class="pill plain">'+esc(x==="*"?"all unpinned":x)+'</span>'}).join(" ")||'<span class="sub">no slots</span>';
+  var lat=d.last_ms?'<span class="dv-i" title="last vote round-trip">⏱<small>'+esc(d.last_ms)+'ms</small></span>':'';
+  var fp=d.fingerprint&&window.fpTiles?fpTiles(d.fingerprint.replace(/ /g,""),"phone identity"):'';
+  var acts='';
+  if(d.pending)acts=btn("Fingerprints match",'data-do="pin"',RO?"read-only":"","primary")+(d.code?btn("Reject",'data-drop="'+esc(d.code)+'"',RO?"read-only":"","danger"):'');
+  else if(d.code)acts=btn("Drop link",'data-drop="'+esc(d.code)+'"',RO?"read-only":"","ghost");
+  return '<div class="dv '+st[0]+'"><div class="dv-h"><span class="pill '+st[0]+'" title="link">'+st[1]+' '+esc(st[2])+'</span><b>'+esc(d.label)+'</b><small class="mono sub">'+esc(d.id)+'</small></div>'+
+    '<div class="dv-r"><span class="dv-i" title="pairing code">⌁<small class="mono">'+esc(d.code||"—")+'</small></span>'+rssiBars(d.rssi)+lat+'</div>'+
+    '<div class="dv-r" title="slots this phone signs">◎ '+slots+'</div>'+(fp?'<div class="dv-fp">'+fp+'</div>':'')+(acts?'<div class="row">'+acts+'</div>':'')+'</div>'}
+function pairCard(){var p=S.phone||{};var devs=p.devices||[];var chosen=p.codes||[];var max=p.max_links||7;
+  var up=devs.filter(function(d){return d.link==="up"}).length;
+  var dial=devs.some(function(d){return d.link==="connecting"})||p.link==="connecting"||chosen.length>0;
+  var ls=!p.bluetooth?["","○","off"]:up?["ok live","●","connected"]:dial?["warn","◌","connecting"]:["","○","idle"];
+  var head='<div class="dv-top"><h2 class="lh">ᛒ Phones</h2><span class="pill '+ls[0]+'" title="Bluetooth link">'+ls[1]+' '+ls[2]+'</span><span class="pill plain" title="sealed sessions">🔒 '+up+'/'+devs.filter(function(d){return !d.pending}).length+'</span><span class="pill plain" title="concurrent Bluetooth links">⇄ '+chosen.length+'/'+max+'</span><button class="icon-btn'+(p.bluetooth?" on":"")+'" data-do="'+(p.bluetooth?"bt-off":"bt-on")+'" title="'+(p.bluetooth?"Bluetooth is on · tap to turn off":"Bluetooth is off · tap to turn on")+'" aria-label="Bluetooth '+(p.bluetooth?"on":"off")+'"'+(RO?" disabled":"")+'>⏻</button></div>';
+  var free=Object.keys(p.seen||{}).filter(function(c){return chosen.indexOf(c)<0});
+  var add='';
+  if(p.bluetooth){add=free.length&&chosen.length<max?'<div class="dv-add"><small class="sub">＋ add phone · pick the code your phone shows</small><div class="codes">'+free.map(function(c){return '<button class="code" data-pair="'+esc(c)+'"'+(RO?' disabled':'')+'>'+esc(c)+'<small>rssi '+esc(p.seen[c])+'</small></button>'}).join("")+'</div></div>':(chosen.length<max?'<p class="sub">＋ open KMS on another phone to add it.</p>':'')}
+  var kfp=p.kms_fingerprint?'<small class="sub">this console · <span class="mono">'+esc(p.kms_fingerprint)+'</span></small>':'';
+  var grid=devs.length?'<div class="dv-grid">'+devs.map(devCard).join("")+'</div>':'<div class="empty" style="padding:16px">No phones yet. Turn on Bluetooth and pick your phone\'s code.</div>';
+  var pairQR=(!p.paired&&S.vals.length)?'<div class="qr" style="margin-top:12px"><img alt="Pairing QR" width="160" height="160" src="/slot-qr.png?pair=1"></div>':'';
+  return '<section class="card" id="phones">'+head+(p.error?'<div class="next danger">'+esc(p.error)+'</div>':'')+grid+add+kfp+pairQR+'</section>'}
+function onchainTag(v){var o=v.onchain;if(halted(v)&&!(o&&o.found))return ' <span class="pill warn plain" title="No new blocks; validator status not re-checked">⏸ chain halted</span>';if(!o||!o.checked)return "";if(!o.found)return ' <span class="pill warn plain">not a validator yet</span>';return ' <small class="sub">on-chain “'+esc(o.moniker)+'”</small>'}
 function namesBlock(v){var o=v.onchain||{};var own=S.owners[v.id]||{};
   var h='<dl class="kv" style="margin:8px 0"><dt>Name on phone</dt><dd>'+(v.phone_names?esc(v.phone_name||"—"):'<span class="sub">this zigner does not send names yet</span>')+'</dd><dt>Console name</dt><dd>'+esc(own.name||"—")+'</dd><dt>On-chain moniker</dt><dd>'+(o.checked?(o.found?esc(o.moniker)+' <span class="mono sub">'+esc(o.valoper)+'</span>':'<span class="pill warn plain">no validator for this key</span>'):'<span class="sub">checking…</span>')+'</dd></dl>';
   if(v.phone_names&&own.name&&v.phone_name&&own.name!==v.phone_name)h+='<div class="next warn">The phone calls this key “'+esc(v.phone_name)+'”. The phone name wins; rename on the phone or set the console name to match.</div>';
   return h+'<div class="inline"><input id="console-name" maxlength="40" placeholder="'+esc(vname(v))+'" value="'+esc(own.name||"")+'">'+btn("Save name",'id="name-save"',RO?"read-only":"","ghost")+'</div>'}
 function slotKeyBlock(v){if(v.signer!=="phone")return "";
-  if(v.phone_key)return '<dl class="kv" style="margin:8px 0 16px"><dt>Phone key</dt><dd><span class="pill ok">on phone</span> <span class="mono">'+esc(v.phone_key_id)+'</span></dd><dt>Phone slot</dt><dd class="mono">'+esc(v.slot_name)+'</dd></dl>';
+  if(v.phone_key)return '<dl class="kv" style="margin:8px 0 16px"><dt>Phone key</dt><dd><span class="pill ok">on phone</span> <span class="mono">'+esc(v.phone_key_id)+'</span></dd><dt>Phone slot</dt><dd class="mono">'+esc(v.slot_name)+'</dd></dl>'+(window.moveBlock?moveBlock(v):"");
   return '<div class="review" style="margin:8px 0 16px"><h3 style="margin-top:0">Add this validator\'s key to your phone</h3><div class="qr"><figure style="margin:0;text-align:center"><img alt="'+esc(v.name)+' key QR" width="200" height="200" src="/slot-qr.png?id='+encodeURIComponent(v.id)+'"><figcaption class="sub"><b>'+esc(v.name)+'</b> · '+esc(v.chain_id)+' · slot '+esc(v.slot_name)+'</figcaption></figure><ol class="sub" style="max-width:360px"><li>On the phone, open Zigner and tap <b>New validator</b>.</li><li>Scan this QR. It names the slot <b>'+esc(v.slot_name)+'</b>, so the phone makes a new key for '+esc(v.name)+' instead of reusing another validator\'s key.</li><li>Tap <b>Start</b> for '+esc(v.name)+' on the phone.</li><li>This tab updates when the phone publishes the key.</li></ol></div></div>'}
 function validatorView(v){
   var ph=S.phone||{};
@@ -263,9 +290,9 @@ function validatorView(v){
   var h='<div class="grid"><section class="card span-8"><div class="row"><h2 style="margin:0">'+esc(v.name)+'</h2>'+statusPill(v)+jailPill(v)+enginePill(v)+'</div><p class="sub">'+esc(v.chain_id)+(v.slot!==v.chain_id?' · slot '+esc(v.slot):'')+' · '+esc(v.source)+'</p>'+
   step([["Phone key","on phone"],["Engine","armed"],["Node","privval connected"],["Signing","votes signed"],["Active","in set"]],life,/down|mismatch|error/.test(v.status+e))+
   '<div class="next '+(life===4?"ok":"")+'">'+esc(lifeNext)+'</div>'+jailBanner(v)+slotKeyBlock(v)+
-  '<div class="stats"><div class="stat"><span>Height</span><b class="mono">'+esc(v.height||"—")+'</b></div><div class="stat"><span>Block lag</span><b>'+(v.lag_ms?(v.lag_ms/1000).toFixed(1)+"s":"—")+'</b></div><div class="stat"><span>Voting power</span><b>'+esc(v.voting_power||"0")+'</b></div><div class="stat"><span>Last signed</span><b class="mono">'+esc(v.last_signed||"—")+'</b></div></div>'+
+  '<div class="stats"><div class="stat"><span>Height</span><b class="mono">'+esc(v.height||"—")+'</b></div><div class="stat"><span>Block lag</span><b>'+(v.lag_ms?(v.lag_ms/1000).toFixed(1)+"s":"—")+(halted(v)?' <span class="pill warn plain">⏸ halted</span>':"")+'</b></div><div class="stat"><span>Voting power</span><b>'+esc(v.voting_power||"0")+'</b></div><div class="stat"><span>Last signed</span><b class="mono">'+esc(v.last_signed||"—")+'</b></div></div>'+
   '<dl class="kv"><dt>Node RPC</dt><dd class="mono">'+esc(v.rpc||"none in config")+'</dd><dt>Privval</dt><dd class="mono">'+esc(v.privval)+'</dd><dt>Signer</dt><dd>'+esc(v.signer)+' <span class="mono">'+esc(v.signer_ref||"")+'</span></dd><dt>Key id</dt><dd class="mono">'+esc(v.key_id||"—")+'</dd><dt>Consensus addr</dt><dd class="mono">'+esc(v.consensus_addr||"—")+'</dd></dl>'+(v.error?'<div class="next danger" style="margin-top:12px">'+esc(v.error)+'</div>':'')+'</section>'+
-  '<section class="card span-4"><h2>Owner</h2><p class="sub">Every action is one transaction signed by this account on the phone; it pays the THIOL fee.</p><div class="field" id="f-granter"><label for="granter">Owner account</label><input id="granter" class="mono" placeholder="terp1…" value="'+esc(S.granter)+'" autocomplete="off" spellcheck="false"><span class="hint">Offline account that owns this validator. Never a key.</span><span class="err"></span></div>'+ownerBlock()+namesBlock(v)+'<div id="holdings">'+holdingsView(v)+'</div></section>'+
+  '<section class="card span-4"><h2>Owner</h2><p class="sub">Every action is one transaction signed by this account on the phone; it pays the THIOL fee.</p><div class="field" id="f-granter"><label for="granter">Owner account</label><input id="granter" class="mono" placeholder="terp1…" value="'+esc(S.granter)+'" autocomplete="off" spellcheck="false"><span class="hint">'+(!(S.owners[v.id]||{}).granter&&v.owner_derived?'<span class="pill info plain" title="Derived from '+esc((v.onchain||{}).valoper||"")+' (same bytes, account prefix)">⇄ valoper</span> ':"")+'Offline account that owns this validator. Never a key.</span><span class="err"></span></div>'+ownerBlock()+namesBlock(v)+'<div id="holdings">'+holdingsView(v)+'</div></section>'+
   actionsCard(v)+'</div>';
   return h}
 function holdingsView(v){var d=S.hold[v.id];if(!S.granter)return '<p class="sub">Enter the owner account to load balances.</p>';if(!d)return '<div class="skeleton"></div>';if(d.error)return '<div class="next danger">'+esc(d.error)+'</div>';var f=d.fmt;
@@ -318,7 +345,7 @@ function sigScan(v){var frames=[];scanStart(function(t){if(!/^ur:cworch-sig\//i.
   sigVerify(v,frames.slice(),scanStop).then(function(r){if(r&&r.progress&&SCAN)SCAN.say("Animated QR: "+r.progress.have+" of "+r.progress.need+" frames. Keep it in view.")});return false},"Hold zigner's signature QR in the frame.")}
 
 function resultView(v){var r=S.result[v.id]||{},x=r.tx||{};var bad=r.error||x.stage!=="committed";return '<div class="next '+(bad?(x.stage==="pending"?"warn":"danger"):"ok")+'">'+esc(r.summary||r.error||"")+(r.error&&r.summary?'<br>'+esc(r.error):'')+'</div><dl class="kv"><dt>Tx hash</dt><dd class="hash">'+esc(x.hash||"—")+'</dd><dt>Stage</dt><dd>'+esc(x.stage||"—")+'</dd><dt>Height</dt><dd>'+esc(x.height||"—")+'</dd><dt>Code</dt><dd>'+esc(x.code==null?"—":x.code)+'</dd>'+(x.log&&x.code?'<dt>Log</dt><dd class="mono">'+esc(x.log)+'</dd>':'')+(r.status?'<dt>Validator</dt><dd>'+esc(r.status.replace("BOND_STATUS_","").toLowerCase())+(r.jailed?", jailed":", not jailed")+'</dd>':'')+(r.power_note?'<dt>Active set</dt><dd>'+esc(r.power_note)+'</dd>':'')+'</dl><div class="row" style="margin-top:16px">'+btn("New action",'data-do="reset"',"","primary")+'</div>'}
-function render(){tabs();headerPills();var v=cur();var html=v?validatorView(v):overview();if(v)html+='<div class="grid" style="margin-top:16px">'+pairCard()+'</div>';$("#view").innerHTML=html;wire(v)}
+function render(){tabs();headerPills();var v=cur();var html=v?validatorView(v):overview();$("#view").innerHTML='<div class="layout"><aside>'+pairCard()+'</aside><div class="main">'+html+'</div></div>';wire(v)}
 function setErr(id,msg){S.errs[id]=msg;var f=$("#f-"+id);if(!f)return;f.classList.toggle("invalid",!!msg);f.classList.toggle("valid",!msg&&!!($("input,textarea",f)||{}).value);$(".err",f).textContent=msg||""}
 function validateGranter(x){return /^terp1[02-9ac-hj-np-z]{38}$/.test(x)?"":"a terp1… account (39 characters after terp1)"}
 function validateAmount(x,v){if(!x)return "required";if(!TERP.test(x))return "a number with up to 6 decimals";if(Number(x)<=0)return "must be above zero";var d=S.hold[v.id];if(d&&!d.error){var un=actOf(v)==="undelegate";var cap=un?d.holdings.delegated_uterp:d.holdings.spendable_uterp;if(Math.round(Number(x)*1e6)>Number(cap))return "more than "+(un?"delegated":"available")}return ""}
@@ -344,6 +371,7 @@ function scanStart(onText,prompt){if(typeof onText!=="function"){onText=function
     (function tick(){if(me.stop)return;if(vid.readyState>=2){cv.width=vid.videoWidth;cv.height=vid.videoHeight;cx.drawImage(vid,0,0);
       var p=det?det.detect(cv).then(function(c){return c[0]&&c[0].rawValue}):Promise.resolve((function(){var q=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height,{inversionAttempts:"dontInvert"});return q&&q.data})());
       p.then(function(t){if(t&&onText(t.trim()))return;setTimeout(tick,200)}).catch(function(){setTimeout(tick,200)})}else setTimeout(tick,200)})()}).catch(function(e){scanStop();S.ownerErr="Camera: "+e.message+". Paste the account QR text instead.";render()})}
+window.scanStart=scanStart;window.scanStop=scanStop;window.scanSay=function(m){if(SCAN)SCAN.say(m)};
 function loadHold(v){if(!S.granter||validateGranter(S.granter))return;api("/api/actions/holdings?id="+encodeURIComponent(v.id)+"&granter="+encodeURIComponent(S.granter)).then(function(d){S.hold[v.id]=d;if(S.flow[v.id]==null||S.flow[v.id]==="form")render()}).catch(function(e){S.hold[v.id]={error:e.message};render()})}
 function wire(v){
   var g=$("#granter");if(g){g.oninput=function(){var x=g.value.trim();var e=validateGranter(x);setErr("granter",x?e:"");if(!e&&x!==S.granter){ownerPost({granter:x}).then(function(){loadHold(v);render()}).catch(fail)}}}
@@ -354,11 +382,12 @@ function wire(v){
   var os=$("#owner-scan");if(os)os.onclick=scanStart;var oc=$("#owner-check");if(oc)oc.onclick=function(){var t=$("#owner-paste").value.trim();if(t)ownerSubmit(t)};var ox=$("#owner-clear");if(ox)ox.onclick=function(){S.ownerErr="";ownerPost({clear:true}).then(render).catch(fail)};
   var nm=$("#name-save");if(nm)nm.onclick=function(){var x=(val("console-name")||"");if(!x)return;ownerPost({name:x}).then(function(){toast("ok","Saved","Console name for "+v.slot);render()}).catch(fail)};
   if(v&&S.granter&&!S.hold[v.id])loadHold(v)}
-document.addEventListener("click",function(e){var t=e.target.closest("[data-open],[data-act],[data-do],[data-max],[data-pair]");if(!t||t.disabled)return;var v=cur();
+document.addEventListener("click",function(e){var t=e.target.closest("[data-open],[data-act],[data-do],[data-max],[data-pair],[data-drop]");if(!t||t.disabled)return;var v=cur();
   if(t.dataset.open){S.tab=t.dataset.open;sessionStorage.setItem("tab",S.tab);render();return}
   if(t.dataset.act){S.act=t.dataset.act;S.errs={};render();return}
   if(t.dataset.max){var d=S.hold[v.id];if(d&&!d.error){$("#amount").value=d.fmt[t.dataset.max].replace(/,/g,"");$("#amount").oninput()}return}
   if(t.dataset.pair){api("/api/pair",{code:t.dataset.pair}).then(function(p){S.phone=p;toast("ok","Paired","Waiting for the phone's fingerprint");render()}).catch(fail);return}
+  if(t.dataset.drop){if(!confirm("Drop the Bluetooth link to "+t.dataset.drop+"? Signing on this phone stops until you pick its code again."))return;api("/api/reject",{code:t.dataset.drop}).then(function(p){S.phone=p;render()}).catch(fail);return}
   var d=t.dataset.do;
   if(d==="bt-on"||d==="bt-off")api("/api/bluetooth",{enabled:d==="bt-on"}).then(function(p){S.phone=p;render()}).catch(fail);
   if(d==="pin")api("/api/confirm-phone",{}).then(function(){toast("ok","Phone pinned","Only this phone can sign now")}).catch(fail);

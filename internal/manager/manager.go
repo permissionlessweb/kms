@@ -17,8 +17,8 @@ const (
 	defaultDialTimeout    = 5 * time.Second
 	defaultReadTimeout    = 10 * time.Second // must exceed the validator's ping interval (~3.3s at default)
 	defaultWriteTimeout   = 5 * time.Second
-	defaultBackoffInitial = 200 * time.Millisecond
-	defaultBackoffMax     = 10 * time.Second
+	defaultBackoffInitial = 250 * time.Millisecond
+	defaultBackoffMax     = 750 * time.Millisecond // must stay well under CometBFT timeout_accept (~3s)
 )
 
 // maxRemoteSignerMsgSize mirrors privval's framing cap.
@@ -43,6 +43,8 @@ type ValidatorConn struct {
 	// The temporary node asks for its pubkey as morocco-1 and for block
 	// signatures as test-1. The live signer leaves this false.
 	UseRequestChainID bool
+	// RedialMax caps the redial interval while disconnected (0 = default 750ms).
+	RedialMax time.Duration
 }
 
 // Manager supervises one validator connection per ValidatorConn, dialing out and
@@ -87,7 +89,7 @@ func (m *Manager) run(c ValidatorConn) {
 	if base == nil {
 		base = privval.DialTCPFn(c.Addr, defaultDialTimeout, c.IdentityKey)
 	}
-	dialer := backoffDialer(base, m.stop, logger, defaultBackoffInitial, defaultBackoffMax)
+	dialer := backoffDialer(base, m.stop, logger, defaultBackoffInitial, redialMax(c.RedialMax))
 
 	for {
 		select {
@@ -231,4 +233,12 @@ func describeRequest(req privvalproto.Message) (kind string, kv []any, ping bool
 	default:
 		return "unknown", nil, false
 	}
+}
+
+// redialMax returns the configured cap or the fast default.
+func redialMax(d time.Duration) time.Duration {
+	if d <= 0 {
+		return defaultBackoffMax
+	}
+	return d
 }

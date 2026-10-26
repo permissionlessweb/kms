@@ -75,6 +75,9 @@ func decodeSignFor(in []byte) (id [8]byte, height uint64, round uint32, step uin
 // Link shares its Noise session and request slot; requests are serialized.
 type KeyLink struct {
 	l     *Link
+	// m, when set, picks the link per vote: the live session of the phone
+	// pinned for label. One phone dropping never blocks another's slots.
+	m     *Mesh
 	pub   ed25519.PublicKey
 	id    [8]byte
 	label string
@@ -109,7 +112,7 @@ func (l *Link) PubKeyFor(k config.Key, label string) ([]byte, error) {
 	if b, err := hex.DecodeString(strings.TrimSpace(k.KeyID)); err == nil && len(b) == ed25519.PublicKeySize {
 		return b, nil
 	}
-	raw, err := os.ReadFile(filepath.Join(l.dir, "keys", label, "pub.hex"))
+	raw, err := os.ReadFile(filepath.Join(l.home, "keys", label, "pub.hex"))
 	if err != nil {
 		return nil, fmt.Errorf("bluetooth: phone has not published key %q: %w", label, err)
 	}
@@ -154,16 +157,34 @@ func (k *KeyLink) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 	if len(msg) == 0 {
 		return nil, errors.New("bluetooth: empty sign bytes")
 	}
-	slot := k.l.slot()
+	l := k.l
+	if k.m != nil {
+		var err error
+		if l, err = k.m.route(k.label); err != nil {
+			return nil, err
+		}
+	}
+	slot := l.slot()
 	slot.Lock()
 	defer slot.Unlock()
-	l := k.l
 	if err := l.readySession(); err != nil {
 		return nil, err
 	}
 	k.mu.Lock()
 	h, r, s := k.hrs.h, k.hrs.r, k.hrs.s
 	k.mu.Unlock()
+	if err := handoffGate(l.home, k.label, h); err != nil {
+		return nil, err
+	}
+	l.sessMu.Lock()
+	var remote []byte
+	if l.sess != nil {
+		remote = append([]byte(nil), l.sess.RemoteStatic...)
+	}
+	l.sessMu.Unlock()
+	if err := slotAllows(l.home, k.label, remote); err != nil {
+		return nil, err
+	}
 	l.mu.Lock()
 	reqID := l.next
 	l.next++
@@ -230,4 +251,10 @@ func (k *KeyLink) Sign(ctx context.Context, msg []byte) ([]byte, error) {
 		k.mu.Unlock()
 		return sig, nil
 	}
+}
+
+// PubKeyFor resolves a configured key. The mesh scanner merges every
+// phone's key list into <home>/keys, so the root link sees them all.
+func (m *Mesh) PubKeyFor(k config.Key, label string) ([]byte, error) {
+	return m.root.PubKeyFor(k, label)
 }

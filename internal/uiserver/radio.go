@@ -20,6 +20,8 @@ type Radio struct {
 	State string
 	Link  string
 	Seen  map[string]int
+	// Links is each chosen code's connection (scanner mesh mode).
+	Links map[string]string
 }
 
 func (r *Radio) Start(bin string) error {
@@ -89,6 +91,12 @@ func (r *Radio) apply(line []byte) {
 		r.State = ev.Value
 	case "link":
 		r.Link = ev.Value
+		if ev.Code != "" {
+			if r.Links == nil {
+				r.Links = map[string]string{}
+			}
+			r.Links[ev.Code] = ev.Value
+		}
 	case "seen":
 		if r.Seen == nil {
 			r.Seen = map[string]int{}
@@ -109,6 +117,17 @@ func (r *Radio) Stop() {
 	}
 	_ = exec.Command("pkill", "-f", "BleScan.app/Contents/MacOS/ble-scan").Run()
 	_ = os.Remove("/tmp/kms-ble-events.jsonl")
+}
+
+// LinkStates is each code's last reported connection.
+func (r *Radio) LinkStates() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]string{}
+	for k, v := range r.Links {
+		out[k] = v
+	}
+	return out
 }
 
 func (r *Radio) Snapshot() (string, map[string]int, string) {

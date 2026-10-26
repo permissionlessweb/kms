@@ -2,9 +2,13 @@ import AppKit
 import CoreBluetooth
 import Foundation
 
-/// Scans for a Zigner advertisement, then connects only to the pairing code
-/// the console accepted. Sign bytes go to the phone. The signature comes back
-/// on a notify. This process does not hold the consensus private key.
+/// Scans for Zigner advertisements and holds one connection per pairing code
+/// the console accepted (<dir>/chosen, one code per line, at most maxLinks).
+/// Each phone gets its own request drop at <dir>/links/<code>/ (req.json,
+/// resp.json, pub.hex, keys/), its own in-flight slot and its own redial
+/// timer, so one phone stalling never holds back another. The Noise session
+/// and pin checks live in the KMS (signing/bluetooth/mesh.go); this process
+/// only moves sealed bytes and never holds a consensus private key.
 let serviceUUID = CBUUID(string: "e7c8a1b0-4f3e-4c2a-9b6d-6b6d73000001")
 let pubUUID = CBUUID(string: "e7c8a1b0-4f3e-4c2a-9b6d-6b6d73000002")
 let signUUID = CBUUID(string: "e7c8a1b0-4f3e-4c2a-9b6d-6b6d73000003")
@@ -18,12 +22,13 @@ let statusUUID = CBUUID(string: "e7c8a1b0-4f3e-4c2a-9b6d-6b6d73000006")
 /// the Noise box like 0x10, so they need no scanner change.
 let keysUUID = CBUUID(string: "e7c8a1b0-4f3e-4c2a-9b6d-6b6d73000007")
 
-final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
-    var central: CBCentralManager!
-    var byCode: [String: CBPeripheral] = [:]
-    var connected: CBPeripheral?
-    var connectedCode = ""
-    var pubChar: CBCharacteristic?
+let maxLinks = 7
+
+/// One phone connection.
+final class PLink {
+    let code: String
+    let dir: URL
+    var peripheral: CBPeripheral?
     var signChar: CBCharacteristic?
     var sigChar: CBCharacteristic?
     var granterChar: CBCharacteristic?
@@ -34,20 +39,42 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var lastReq: UInt64 = 0
     var inflight: UInt64 = 0
     var inflightAt = Date.distantPast
+    var inflightOp: UInt8 = 0
     var sigReady = false
     var timeouts = 0
-    /// Noise hellos (0x50) in a row that got no reply. The phone can keep
-    /// answering other frames from a dead session, so this is counted apart
-    /// from `timeouts` and only a hello reply (0x51) clears it.
     var helloMisses = 0
-    let helloMissLimit = 3
-    var inflightOp: UInt8 = 0
     var nextConnect = Date.distantPast
+    var backoff: TimeInterval = 0
     var lastStatus = Date.distantPast
+    var lastRSSI = Date.distantPast
+    var state = "down"
+    var keys: [Scan.PhoneKey] = []
+    init(code: String, root: URL) {
+        self.code = code
+        dir = root.appendingPathComponent("links").appendingPathComponent(code)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    func reset() {
+        signChar = nil; sigChar = nil; granterChar = nil; statusChar = nil; keysChar = nil
+        inflight = 0; timeouts = 0; helloMisses = 0; sigReady = false
+    }
+    /// Fast first redial, doubling to 1.5s, with jitter so links that drop
+    /// together do not dial in lockstep.
+    func scheduleRedial() {
+        backoff = backoff == 0 ? 0.25 : min(backoff * 2, 1.5)
+        nextConnect = Date().addingTimeInterval(backoff + Double.random(in: 0...0.3))
+    }
+}
+
+final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+    var central: CBCentralManager!
+    var byCode: [String: CBPeripheral] = [:]
+    var links: [String: PLink] = [:]
+    let helloMissLimit = 3
     let dir: URL = {
         let path = ProcessInfo.processInfo.environment["KMS_BLE_DIR"] ?? "/tmp/kms-ble"
         let url = URL(fileURLWithPath: path)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: url.appendingPathComponent("links"), withIntermediateDirectories: true)
         return url
     }()
 
@@ -57,9 +84,18 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             queue: nil,
             options: [CBCentralManagerOptionShowPowerAlertKey: true]
         )
-        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.pump()
         }
+    }
+
+    func link(for p: CBPeripheral) -> PLink? {
+        links.values.first { $0.peripheral == p }
+    }
+
+    func setState(_ l: PLink, _ v: String) {
+        l.state = v
+        emit(["event": "link", "code": l.code, "value": v])
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -98,153 +134,172 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         let code = data.suffix(4).map { String(format: "%02x", $0) }.joined()
         let previous = byCode[code]
         byCode[code] = peripheral
-        if let previous, previous != peripheral, connected == previous {
+        if let previous, previous != peripheral, let l = links[code], l.peripheral == previous {
             central.cancelPeripheralConnection(previous)
-            connected = nil
-            connectedCode = ""
-            signChar = nil
-            statusChar = nil
-            nextConnect = Date()
+            l.peripheral = nil
+            l.reset()
+            l.nextConnect = Date()
         }
         emit(["event": "seen", "code": code, "rssi": RSSI.intValue])
     }
 
+    func isPrimary(_ l: PLink) -> Bool { chosenCodes().first == l.code }
+
+    func chosenCodes() -> [String] {
+        let raw = (try? String(contentsOf: dir.appendingPathComponent("chosen"), encoding: .utf8)) ?? ""
+        var out: [String] = []
+        for f in raw.split(whereSeparator: { $0.isWhitespace }) {
+            let c = f.lowercased()
+            guard c.count == 8, c.allSatisfy({ $0.isHexDigit }), !out.contains(c) else { continue }
+            out.append(c)
+            if out.count == maxLinks { break }
+        }
+        return out
+    }
+
     func pump() {
         guard central?.state == .poweredOn else { return }
-        let chosen = (try? String(contentsOf: dir.appendingPathComponent("chosen"), encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if chosen.isEmpty {
-            return
+        let chosen = chosenCodes()
+        // Codes the console dropped: hang up those phones only.
+        for (code, l) in links where !chosen.contains(code) {
+            if let p = l.peripheral { central.cancelPeripheralConnection(p) }
+            links[code] = nil
+            emit(["event": "link", "code": code, "value": "removed"])
         }
-        if let peripheral = byCode[chosen] {
-            if let current = connected, current != peripheral {
-                central.cancelPeripheralConnection(current)
-                connected = nil
-                connectedCode = ""
-                signChar = nil
-                statusChar = nil
+        for code in chosen {
+            let l = links[code] ?? { let n = PLink(code: code, root: dir); links[code] = n; return n }()
+            pumpLink(l)
+        }
+    }
+
+    func pumpLink(_ l: PLink) {
+        if let peripheral = byCode[l.code] {
+            if let current = l.peripheral, current != peripheral, current.state != .connected {
+                l.peripheral = nil
+                l.reset()
             }
-            let down = peripheral.state != .connected && peripheral.state != .connecting
-            if down && Date() >= nextConnect {
-                nextConnect = Date().addingTimeInterval(1.2)
-                peripheral.delegate = self
-                central.connect(peripheral, options: nil)
-                emit(["event": "link", "value": "connecting"])
+            let p = l.peripheral ?? peripheral
+            let down = p.state != .connected && p.state != .connecting
+            if down && Date() >= l.nextConnect {
+                l.scheduleRedial()
+                l.peripheral = p
+                p.delegate = self
+                central.connect(p, options: nil)
+                setState(l, "connecting")
             }
         }
-        guard connected != nil, signChar != nil, sigReady else { return }
+        guard let p = l.peripheral, p.state == .connected, let signChar = l.signChar, l.sigReady else { return }
+        if Date().timeIntervalSince(l.lastRSSI) > 3 {
+            l.lastRSSI = Date()
+            p.readRSSI()
+        }
         // One lost reply is resent on the same link. A second one in a row
-        // means the phone closed its GATT server (Stop, reinstall, radio
-        // restart) while macOS kept the old link and stale handles, so drop
-        // the link and dial the phone again.
-        if inflight != 0 {
-            if Date().timeIntervalSince(inflightAt) > 8 {
-                inflight = 0
-                timeouts += 1
-                if inflightOp == 0x50 {
-                    helloMisses += 1
-                    emit(["event": "hello-timeout", "count": helloMisses])
-                    if helloMisses >= helloMissLimit {
-                        drop("hello-timeouts")
+        // means the phone closed its GATT server while macOS kept the old
+        // link and stale handles: drop this link (only) and dial again.
+        if l.inflight != 0 {
+            if Date().timeIntervalSince(l.inflightAt) > 8 {
+                l.inflight = 0
+                l.timeouts += 1
+                if l.inflightOp == 0x50 {
+                    l.helloMisses += 1
+                    emit(["event": "hello-timeout", "code": l.code, "count": l.helloMisses])
+                    if l.helloMisses >= helloMissLimit {
+                        drop(l, "hello-timeouts")
                         return
                     }
                 }
-                if timeouts >= 2 {
-                    drop("no-reply")
+                if l.timeouts >= 2 {
+                    drop(l, "no-reply")
                     return
                 }
             } else {
                 return
             }
         }
-        if Date().timeIntervalSince(lastKeys) > 10, let keysChar {
-            lastKeys = Date()
-            connected?.readValue(for: keysChar)
+        if Date().timeIntervalSince(l.lastKeys) > 10, let keysChar = l.keysChar {
+            l.lastKeys = Date()
+            p.readValue(for: keysChar)
         }
-        if Date().timeIntervalSince(lastStatus) > 2, let granter = granterChar {
-            connected?.readValue(for: granter)
+        if Date().timeIntervalSince(l.lastStatus) > 2, let granter = l.granterChar {
+            p.readValue(for: granter)
         }
-        if Date().timeIntervalSince(lastStatus) > 2,
-           let statusChar,
+        if Date().timeIntervalSince(l.lastStatus) > 2,
+           let statusChar = l.statusChar,
            let status = try? Data(contentsOf: dir.appendingPathComponent("status.frame")),
            !status.isEmpty {
-            lastStatus = Date()
-            connected?.writeValue(status, for: statusChar, type: .withResponse)
+            l.lastStatus = Date()
+            p.writeValue(status, for: statusChar, type: .withResponse)
         }
-        guard let raw = try? Data(contentsOf: dir.appendingPathComponent("req.json")),
+        guard let raw = try? Data(contentsOf: l.dir.appendingPathComponent("req.json")),
               let obj = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
               let id = (obj["id"] as? NSNumber)?.uint64Value,
-              id != 0, id != lastReq,
+              id != 0, id != l.lastReq,
               let frame = obj["frame"] as? String,
               let bytes = Data(base64Encoded: frame)
         else { return }
-        inflight = id
-        inflightAt = Date()
-        inflightOp = bytes.first ?? 0
-        connected?.writeValue(bytes, for: signChar!, type: .withResponse)
+        l.inflight = id
+        l.inflightAt = Date()
+        l.inflightOp = bytes.first ?? 0
+        p.writeValue(bytes, for: signChar, type: .withResponse)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        guard error == nil, let l = link(for: peripheral) else { return }
+        emit(["event": "seen", "code": l.code, "rssi": RSSI.intValue])
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == signUUID, error != nil else { return }
+        guard characteristic.uuid == signUUID, error != nil, let l = link(for: peripheral) else { return }
         // The frame never left. Allow the same id to be sent again.
-        inflight = 0
+        l.inflight = 0
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        connected = peripheral
+        guard let l = link(for: peripheral) else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
-        emit(["event": "link", "value": "connected"])
+        setState(l, "connected")
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard let l = link(for: peripheral) else { return }
         forget(peripheral)
-        connectedCode = ""
-        nextConnect = Date().addingTimeInterval(1.2)
-        emit(["event": "link", "value": "connect-failed"])
+        l.peripheral = nil
+        l.reset()
+        l.scheduleRedial()
+        setState(l, "down")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        guard let l = link(for: peripheral) else { return }
         forget(peripheral)
-        inflight = 0
-        timeouts = 0
-        sigReady = false
-        if connected == peripheral {
-            connected = nil
-            connectedCode = ""
-            signChar = nil
-            statusChar = nil
-            pubChar = nil
-            keysChar = nil
-        }
-        nextConnect = Date().addingTimeInterval(1.2)
-        emit(["event": "link", "value": "disconnected"])
+        l.peripheral = nil
+        l.reset()
+        l.scheduleRedial()
+        setState(l, "down")
     }
 
-    // drop tears the link down so the next pump connects again.
-    func drop(_ why: String) {
-        timeouts = 0
-        helloMisses = 0
-        inflight = 0
-        sigReady = false
-        if let current = connected {
+    // drop tears one link down so the next pump dials that phone again.
+    func drop(_ l: PLink, _ why: String) {
+        if let current = l.peripheral {
             central?.cancelPeripheralConnection(current)
             forget(current)
         }
-        connected = nil
-        connectedCode = ""
-        signChar = nil
-        statusChar = nil
-        pubChar = nil
-        keysChar = nil
-        nextConnect = Date()
-        emit(["event": "link", "value": "dropped-" + why])
+        l.peripheral = nil
+        l.reset()
+        l.backoff = 0
+        l.nextConnect = Date()
+        setState(l, "down")
+        emit(["event": "dropped", "code": l.code, "why": why])
     }
 
     // The phone reopened its GATT server; the cached handles are gone.
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
-        if invalidatedServices.contains(where: { $0.uuid == serviceUUID }) {
-            drop("services-changed")
+        if invalidatedServices.contains(where: { $0.uuid == serviceUUID }), let l = link(for: peripheral) {
+            drop(l, "services-changed")
         }
     }
 
@@ -258,61 +313,67 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard let l = link(for: peripheral) else { return }
         for ch in service.characteristics ?? [] {
             if ch.uuid == pubUUID {
-                pubChar = ch
                 peripheral.readValue(for: ch)
             } else if ch.uuid == signUUID {
-                signChar = ch
+                l.signChar = ch
             } else if ch.uuid == sigUUID {
-                sigChar = ch
+                l.sigChar = ch
                 peripheral.setNotifyValue(true, for: ch)
             } else if ch.uuid == granterUUID {
-                granterChar = ch
+                l.granterChar = ch
                 peripheral.setNotifyValue(true, for: ch)
                 peripheral.readValue(for: ch)
             } else if ch.uuid == statusUUID {
-                statusChar = ch
+                l.statusChar = ch
             } else if ch.uuid == keysUUID {
-                keysChar = ch
-                lastKeys = Date()
+                l.keysChar = ch
+                l.lastKeys = Date()
                 peripheral.readValue(for: ch)
-                // zigner with names notifies a one-byte 'N' hint on rename.
                 if ch.properties.contains(.notify) { peripheral.setNotifyValue(true, for: ch) }
             }
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        if characteristic.uuid == sigUUID, error == nil {
-            sigReady = true
+        if characteristic.uuid == sigUUID, error == nil, let l = link(for: peripheral) {
+            l.sigReady = true
+            l.backoff = 0
+            setState(l, "up")
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard let value = characteristic.value else { return }
+        guard let value = characteristic.value, let l = link(for: peripheral) else { return }
         if characteristic.uuid == pubUUID, value.count == 32 {
             let hex = value.map { String(format: "%02x", $0) }.joined()
-            try? Data(hex.utf8).write(to: dir.appendingPathComponent("pub.hex"))
-            emit(["event": "pubkey", "hex": hex])
+            try? Data(hex.utf8).write(to: l.dir.appendingPathComponent("pub.hex"))
+            // Root copies are the legacy single-phone view: only the primary
+            // (first chosen) link writes them, so phones never overwrite each other.
+            if isPrimary(l) { try? Data(hex.utf8).write(to: dir.appendingPathComponent("pub.hex")) }
+            emit(["event": "pubkey", "code": l.code, "hex": hex])
             return
         }
         if characteristic.uuid == keysUUID {
             if value.count == 1 && value.first == 0x4E {
-                // Change hint: the listing itself may be longer than one notify.
-                lastKeys = Date()
+                l.lastKeys = Date()
                 peripheral.readValue(for: characteristic)
                 return
             }
-            publishKeys(value)
+            publishKeys(l, value)
             return
         }
         if characteristic.uuid == granterUUID {
             guard let text = String(data: value, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   text.hasPrefix("terp1"), text.count <= 90
             else { return }
-            try? Data(text.utf8).write(to: dir.appendingPathComponent("granter"))
-            emit(["event": "granter", "address": text])
+            try? Data(text.utf8).write(to: l.dir.appendingPathComponent("granter"))
+            // Root copies are the legacy single-phone view: only the primary
+            // (first chosen) link writes them, so phones never overwrite each other.
+            if isPrimary(l) { try? Data(text.utf8).write(to: dir.appendingPathComponent("granter")) }
+            emit(["event": "granter", "code": l.code, "address": text])
             return
         }
         if characteristic.uuid == sigUUID {
@@ -322,24 +383,22 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             } else if sig.first != 0x11 {
                 sig = value
             }
-            guard !sig.isEmpty, inflight != 0 else { return }
-            let answered = inflight
-            lastReq = answered
-            inflight = 0
-            timeouts = 0
-            if value.first == 0x51 { helloMisses = 0 }
+            guard !sig.isEmpty, l.inflight != 0 else { return }
+            let answered = l.inflight
+            l.lastReq = answered
+            l.inflight = 0
+            l.timeouts = 0
+            if value.first == 0x51 { l.helloMisses = 0 }
             let body: [String: Any] = ["id": answered, "sig": sig.base64EncodedString()]
             if let data = try? JSONSerialization.data(withJSONObject: body) {
-                try? data.write(to: dir.appendingPathComponent("resp.json"))
+                try? data.write(to: l.dir.appendingPathComponent("resp.json"), options: .atomic)
             }
             if sig.first == 0x5f {
-                // Refusal: bytes pass through untouched so kms parseRefusal reads the code
-                // and floor itself (signing/bluetooth/refusal.go); this event is just for logs.
-                var ev: [String: Any] = ["event": "refused", "id": lastReq]
-                if sig.count >= 2 { ev["code"] = Int(sig[sig.startIndex + 1]) }
+                var ev: [String: Any] = ["event": "refused", "code": l.code, "id": answered]
+                if sig.count >= 2 { ev["refusal"] = Int(sig[sig.startIndex + 1]) }
                 emit(ev)
             } else {
-                emit(["event": "signed", "id": lastReq])
+                emit(["event": "signed", "code": l.code, "id": answered])
             }
         }
     }
@@ -393,10 +452,24 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         return t.isEmpty ? "" : t
     }
 
-    func publishKeys(_ value: Data) {
-        guard value != lastKeysBody, let keys = Scan.parseKeys(value) else { return }
-        lastKeysBody = value
-        let root = dir.appendingPathComponent("keys")
+    /// Each phone's keys go to its own drop, and the union of every linked
+    /// phone's keys to <dir>/keys and <dir>/keys.json, so the KMS resolves a
+    /// configured key whichever phone holds it.
+    func publishKeys(_ l: PLink, _ value: Data) {
+        guard value != l.lastKeysBody, let keys = Scan.parseKeys(value) else { return }
+        l.lastKeysBody = value
+        l.keys = keys
+        writeKeys(keys, to: l.dir)
+        var all: [PhoneKey] = []
+        for code in links.keys.sorted() {
+            for k in links[code]!.keys where !all.contains(where: { $0.id == k.id }) { all.append(k) }
+        }
+        writeKeys(all, to: dir)
+        emit(["event": "keys", "code": l.code, "count": keys.count, "ids": keys.map { $0.id }])
+    }
+
+    func writeKeys(_ keys: [PhoneKey], to base: URL) {
+        let root = base.appendingPathComponent("keys")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var listed: [[String: Any]] = []
         for k in keys {
@@ -414,9 +487,8 @@ final class Scan: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             listed.append(row)
         }
         if let data = try? JSONSerialization.data(withJSONObject: ["keys": listed], options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: dir.appendingPathComponent("keys.json"), options: .atomic)
+            try? data.write(to: base.appendingPathComponent("keys.json"), options: .atomic)
         }
-        emit(["event": "keys", "count": keys.count, "ids": keys.map { $0.id }])
     }
 
     func emit(_ obj: [String: Any]) {

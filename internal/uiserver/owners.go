@@ -14,17 +14,18 @@ import (
 	"time"
 
 	"github.com/cosmos/kms/internal/takeoff"
-	"github.com/cosmos/kms/signing/bluetooth"
 )
 
 // Owner is the account that owns one validator slot's on-chain validator
 // (or will create it). It is console bookkeeping only: the signing engine
 // never reads it, so setting or clearing it cannot affect block signing.
 type Owner struct {
-	Granter   string    `json:"granter"`
-	PubkeyHex string    `json:"pubkey_hex,omitempty"`
-	Name      string    `json:"name,omitempty"` // console name for the slot
-	Updated   time.Time `json:"updated"`
+	Granter   string `json:"granter"`
+	PubkeyHex string `json:"pubkey_hex,omitempty"`
+	Name      string `json:"name,omitempty"` // console name for the slot
+	// Derived marks an owner inferred from the on-chain valoper (never saved).
+	Derived bool      `json:"derived,omitempty"`
+	Updated time.Time `json:"updated"`
 }
 
 // ownerStore persists owners per slot (config chain id, e.g. morocco-1/zcinti2).
@@ -206,7 +207,7 @@ func (s *Server) ownersHandler(w http.ResponseWriter, r *http.Request) {
 
 // phonePubHex is the full ed25519 key the phone published for this slot.
 func phonePubHex(v ValidatorView) (string, bool) {
-	raw, err := os.ReadFile(filepath.Join(bluetooth.Dir, "keys", slotKeyLabel(v), "pub.hex"))
+	raw, err := readPublished(filepath.Join("keys", slotKeyLabel(v), "pub.hex"))
 	if err != nil {
 		return "", false
 	}
@@ -220,7 +221,7 @@ func phonePubHex(v ValidatorView) (string, bool) {
 // phoneNames reads keys.json. A key entry carries "name" only when the
 // phone sends the name trailer; names reports whether any entry did.
 func phoneNames() (byLabel map[string]string, names bool) {
-	raw, err := os.ReadFile(filepath.Join(bluetooth.Dir, "keys.json"))
+	raw, err := readPublished("keys.json")
 	if err != nil {
 		return nil, false
 	}
@@ -331,6 +332,16 @@ func (s *Server) fillSlotInfo(list []ValidatorView) {
 				v.PhonePub = pub
 				oc := onchainFor(v.RPC, pub)
 				v.OnChain = &oc
+			}
+		}
+		// Owner default: the valoper's bytes under the account prefix. A
+		// saved owner always wins; the derived one is shown, not stored.
+		if v.OnChain != nil && v.OnChain.Valoper != "" {
+			if d, err := OwnerFromValoper(v.OnChain.Valoper); err == nil {
+				v.OwnerDerived = d
+				if v.Owner == nil {
+					v.Owner = &Owner{Granter: d, Derived: true}
+				}
 			}
 		}
 		v.DisplayName = v.PhoneName

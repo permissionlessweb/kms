@@ -148,6 +148,7 @@ func BuildWith(c *config.Config, allowFresh []string, logger log.Logger, opts Op
 			IdentityKey: idKey,
 			Signer:      cs,
 			Reconnect:   v.ReconnectEnabled(),
+			RedialMax:   v.RedialMax,
 		}
 		if tr == config.TransportNoise {
 			d, derr := transport.NoiseDialer(addr, idKey, validatorPeer, manager.DefaultDialTimeout)

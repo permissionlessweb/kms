@@ -3,6 +3,7 @@ package uiserver
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -29,18 +30,21 @@ type Sign struct {
 
 // State is the page model.
 type State struct {
-	Bluetooth      bool           `json:"bluetooth"`
-	Paired         bool           `json:"paired"`
-	Healthy        bool           `json:"healthy"`
-	NodeURL        string         `json:"node_url"`
-	Height         uint64         `json:"height"`
-	LagMs          int64          `json:"lag_ms"`
-	LastMs         int64          `json:"last_latency_ms"`
-	BlockMs        int64          `json:"block_ms"`
-	ChainID        string         `json:"chain_id"`
-	Network        string         `json:"network"`
-	Qr             string         `json:"qr"`
-	Validator      bool           `json:"validator"`
+	Bluetooth bool   `json:"bluetooth"`
+	Paired    bool   `json:"paired"`
+	Healthy   bool   `json:"healthy"`
+	NodeURL   string `json:"node_url"`
+	Height    uint64 `json:"height"`
+	LagMs     int64  `json:"lag_ms"`
+	LastMs    int64  `json:"last_latency_ms"`
+	BlockMs   int64  `json:"block_ms"`
+	ChainID   string `json:"chain_id"`
+	Network   string `json:"network"`
+	Qr        string `json:"qr"`
+	Validator bool   `json:"validator"`
+	// Halted: no new block for haltAfter; validator status is then the
+	// last known set, not a fresh "not a validator".
+	Halted         bool           `json:"halted"`
 	ConsAddr       string         `json:"consensus_addr"`
 	Takeoff        bool           `json:"takeoff"`
 	Granter        string         `json:"granter"`
@@ -60,6 +64,28 @@ type State struct {
 	KmsFingerprint string         `json:"kms_fingerprint"`
 	PhonePending   string         `json:"phone_pending"`
 	PhonePinned    bool           `json:"phone_pinned"`
+	// Codes is every chosen pairing code (one scanner link each).
+	Codes []string `json:"codes"`
+	// Devices is the phone mesh: one entry per authorized phone, plus the
+	// phone waiting for its fingerprint to be confirmed.
+	Devices []DeviceView `json:"devices"`
+	MaxLinks int          `json:"max_links"`
+}
+
+// DeviceView is one mesh member on the console.
+type DeviceView struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	Noise       string   `json:"noise"`
+	Fingerprint string   `json:"fingerprint"`
+	Code        string   `json:"code"`
+	Link        string   `json:"link"` // up | connecting | down | pending
+	Slots       []string `json:"slots"`
+	RSSI        *int     `json:"rssi,omitempty"`
+	LastMs      int64    `json:"last_ms"`
+	LastAt      string   `json:"last_at"`
+	Caps        []string `json:"caps"`
+	Pending     bool     `json:"pending"`
 }
 
 // Server is the local console.
@@ -106,6 +132,7 @@ func New(addr, nodeURL string, replace bool) (*Server, error) {
 	s.registerValidators(mux)
 	s.registerActions(mux)
 	s.registerOwners(mux)
+	s.registerHandoff(mux)
 	s.registerShell(mux)
 	go func() { _ = http.Serve(ln, mux) }()
 	go s.poll()
@@ -184,6 +211,7 @@ func (s *Server) refreshNode() {
 		}
 	}
 	s.st.BlockMs = s.blockMs
+	s.st.Halted = s.st.LagMs > haltAfter.Milliseconds()
 	node := s.node
 	s.applySession("")
 	s.applyGranter()
@@ -193,22 +221,64 @@ func (s *Server) refreshNode() {
 	s.noteSession()
 }
 
+const haltAfter = 30 * time.Second
+
+// nodePubs lists the phone keys to check against node's set: first the slots
+// whose RPC is this node, then the legacy link key. With several slots the
+// legacy pub.hex can be another slot's key (zcinti2), which made the status
+// frame report "not a validator" for zcinti.
+func (s *Server) nodePubs(node string) [][]byte {
+	var out [][]byte
+	seen := map[string]bool{}
+	add := func(b []byte) {
+		if len(b) == 32 && !seen[string(b)] {
+			seen[string(b)] = true
+			out = append(out, b)
+		}
+	}
+	trim := func(u string) string { return strings.TrimRight(u, "/") }
+	for _, v := range s.Validators() {
+		if v.Signer != "phone" || trim(v.RPC) != trim(node) {
+			continue
+		}
+		if h, ok := phonePubHex(v); ok {
+			b, _ := hex.DecodeString(h)
+			add(b)
+		}
+	}
+	if b, err := bluetooth.DefaultMesh().Root().PubKey(); err == nil {
+		add(b)
+	}
+	return out
+}
+
 func (s *Server) noteValidator(node string) {
-	pub, err := bluetooth.DefaultLink().PubKey()
-	if err != nil || len(pub) != 32 {
+	pubs := s.nodePubs(node)
+	if len(pubs) == 0 {
 		s.mu.Lock()
 		s.st.Validator = false
 		s.st.ConsAddr = ""
 		s.mu.Unlock()
 		return
 	}
-	addr := takeoff.ConsensusAddr(pub)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	ok, qerr := takeoff.InValidatorSet(ctx, node, pub)
+	addr, ok, failed := takeoff.ConsensusAddr(pubs[0]), false, false
+	for _, pub := range pubs {
+		in, err := takeoff.InValidatorSet(ctx, node, pub)
+		if err != nil {
+			failed = true
+			continue
+		}
+		if in {
+			addr, ok = takeoff.ConsensusAddr(pub), true
+			break
+		}
+	}
 	s.mu.Lock()
 	s.st.ConsAddr = addr
-	if qerr == nil {
+	// a failed query keeps the last answer (never a fresh "not a validator")
+	if ok || !failed {
 		s.st.Validator = ok
 	}
 	s.mu.Unlock()
@@ -295,14 +365,28 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 		s.state(w, r)
 		return
 	}
+	codes := bluetooth.ChosenCodes(bluetooth.Dir)
+	has := false
+	for _, c := range codes {
+		has = has || c == body.Code
+	}
+	if !has && len(codes) >= bluetooth.MaxLinks {
+		s.mu.Lock()
+		s.st.Error = fmt.Sprintf("already linked to %d phones (the limit); drop one first", bluetooth.MaxLinks)
+		s.mu.Unlock()
+		s.state(w, r)
+		return
+	}
+	if !has {
+		codes = append(codes, body.Code)
+	}
 	s.mu.Lock()
 	s.chosen = body.Code
 	s.st.Paired = true
 	s.st.Error = ""
 	delete(s.rejected, body.Code)
 	s.mu.Unlock()
-	_ = os.MkdirAll(bluetooth.Dir, 0o700)
-	_ = os.WriteFile(filepath.Join(bluetooth.Dir, "chosen"), []byte(body.Code+"\n"), 0o600)
+	_ = bluetooth.WriteChosen(bluetooth.Dir, codes)
 	_ = radio
 	s.state(w, r)
 }
@@ -315,10 +399,20 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if body.Code != "" {
 		s.rejected[body.Code] = true
+		codes := bluetooth.ChosenCodes(bluetooth.Dir)
+		keep := codes[:0]
+		for _, c := range codes {
+			if c != body.Code {
+				keep = append(keep, c)
+			}
+		}
+		_ = bluetooth.WriteChosen(bluetooth.Dir, keep)
 		if s.chosen == body.Code {
 			s.chosen = ""
-			s.st.Paired = false
-			_ = os.WriteFile(filepath.Join(bluetooth.Dir, "chosen"), nil, 0o600)
+			if len(keep) > 0 {
+				s.chosen = keep[len(keep)-1]
+			}
+			s.st.Paired = len(keep) > 0
 		}
 	}
 	s.st.Error = ""
@@ -444,9 +538,13 @@ func (s *Server) confirmPhone(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "post", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := bluetooth.ConfirmPhone(); err != nil {
+	pub, err := bluetooth.ConfirmPhone()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
+	}
+	if l := bluetooth.DefaultMesh().LinkFor(pub); l != nil {
+		_ = bluetooth.RegisterDevice(pub, "", l.Code())
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "pinned"})
@@ -522,14 +620,11 @@ func containsForbiddenKeyPath(chain string) bool {
 // Resume starts the scanner again when a phone is already accepted.
 // It does not open System Settings.
 func (s *Server) Resume() error {
-	b, err := os.ReadFile(filepath.Join(bluetooth.Dir, "chosen"))
-	if err != nil || s.bin == "" {
+	codes := bluetooth.ChosenCodes(bluetooth.Dir)
+	if len(codes) == 0 || s.bin == "" {
 		return nil
 	}
-	code := strings.TrimSpace(string(b))
-	if code == "" {
-		return nil
-	}
+	code := codes[len(codes)-1]
 	s.mu.Lock()
 	s.chosen = code
 	s.st.Paired = true
@@ -542,17 +637,19 @@ func (s *Server) Resume() error {
 // lives in a file, so a console restart does not look unpaired while the
 // phone is still signing. The caller holds s.mu.
 func (s *Server) applySession(radio string) {
-	if b, err := os.ReadFile(filepath.Join(bluetooth.Dir, "chosen")); err == nil {
-		if code := strings.TrimSpace(string(b)); code != "" {
-			s.chosen = code
-			s.st.Paired = true
-		}
+	codes := bluetooth.ChosenCodes(bluetooth.Dir)
+	if n := len(codes); n > 0 {
+		s.chosen = codes[n-1]
+		s.st.Paired = true
 	}
+	s.st.Codes = codes
+	s.st.MaxLinks = bluetooth.MaxLinks
 	if radio == "on" {
 		s.st.Bluetooth = true
 		s.st.Radio = radio
 	}
-	signs := bluetooth.DefaultLink().Recent()
+	signs := bluetooth.DefaultMesh().Recent()
+	s.st.Devices = s.deviceViews(codes)
 	s.st.Signs = signsFrom(signs)
 	s.st.BlockMs = s.blockMs
 	recent := false

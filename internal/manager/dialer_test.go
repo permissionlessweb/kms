@@ -51,3 +51,30 @@ func TestBackoffDialerUnblocksOnStop(t *testing.T) {
 		t.Fatal("dialer did not unblock on stop")
 	}
 }
+
+func TestBackoffDialerFastCadence(t *testing.T) {
+	var times []time.Time
+	base := func() (net.Conn, error) {
+		times = append(times, time.Now())
+		if len(times) < 6 {
+			return nil, errors.New("refused")
+		}
+		c, _ := net.Pipe()
+		return c, nil
+	}
+	d := backoffDialer(base, make(chan struct{}), log.NewNopLogger(), defaultBackoffInitial, defaultBackoffMax)
+	_, err := d()
+	require.NoError(t, err)
+	for i := 1; i < len(times); i++ {
+		require.LessOrEqual(t, times[i].Sub(times[i-1]), defaultBackoffMax+100*time.Millisecond)
+	}
+	require.LessOrEqual(t, defaultBackoffMax, time.Second)
+}
+
+func TestJitterBounds(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		j := jitter(500 * time.Millisecond)
+		require.LessOrEqual(t, j, 500*time.Millisecond)
+		require.GreaterOrEqual(t, j, 400*time.Millisecond)
+	}
+}

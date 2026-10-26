@@ -60,7 +60,7 @@ type engine struct {
 	path string
 	c    *config.Config
 	st   engineStatus
-	link *bluetooth.Link
+	link *bluetooth.Mesh
 	dial func(config.Validator) privval.SocketDialer // tests only
 	poll time.Duration
 	stop chan struct{}
@@ -78,7 +78,7 @@ func runEngine(srv engineStatus, path string) (*engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &engine{path: path, c: c, st: srv, link: bluetooth.DefaultLink(), poll: time.Second, stop: make(chan struct{})}
+	e := &engine{path: path, c: c, st: srv, link: bluetooth.DefaultMesh(), poll: time.Second, stop: make(chan struct{})}
 	e.start()
 	return e, nil
 }

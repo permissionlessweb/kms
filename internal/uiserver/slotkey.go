@@ -24,9 +24,34 @@ func slotName(v ValidatorView) string {
 // slotKeyLabel is where the scanner publishes this slot's phone key.
 func slotKeyLabel(v ValidatorView) string { return strings.ReplaceAll(v.Slot, "/", "_") }
 
+// readPublished reads a file the scanner publishes about the phone's keys.
+// Single-link mode writes it under bluetooth.Dir; mesh mode writes it per
+// link under Dir/links/<code>/. The root copy wins, then the newest link.
+func readPublished(rel string) ([]byte, error) {
+	if raw, err := os.ReadFile(filepath.Join(bluetooth.Dir, rel)); err == nil {
+		return raw, nil
+	}
+	links, _ := filepath.Glob(filepath.Join(bluetooth.Dir, "links", "*", rel))
+	var best []byte
+	var bestT int64 = -1
+	for _, p := range links {
+		st, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if raw, err := os.ReadFile(p); err == nil && st.ModTime().UnixNano() > bestT {
+			best, bestT = raw, st.ModTime().UnixNano()
+		}
+	}
+	if best == nil {
+		return nil, os.ErrNotExist
+	}
+	return best, nil
+}
+
 // phoneKey reads the public key the phone published for this slot, if any.
 func phoneKey(v ValidatorView) (string, bool) {
-	raw, err := os.ReadFile(filepath.Join(bluetooth.Dir, "keys", slotKeyLabel(v), "pub.hex"))
+	raw, err := readPublished(filepath.Join("keys", slotKeyLabel(v), "pub.hex"))
 	if err != nil {
 		return "", false
 	}

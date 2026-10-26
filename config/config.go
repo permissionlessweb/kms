@@ -9,6 +9,8 @@ import (
 
 	"github.com/cometbft/cometbft/privval"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"time"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,6 +52,8 @@ type Validator struct {
 	Addr        string `yaml:"addr"`         // tcp://host:port
 	IdentityKey string `yaml:"identity_key"` // ed25519 node-key file for SecretConnection
 	Reconnect   *bool  `yaml:"reconnect"`    // default true
+	// RedialMax caps the redial interval while disconnected, e.g. "750ms" (default).
+	RedialMax time.Duration `yaml:"redial_max"`
 	// Name and RPC are optional and only read by `kms console` to list and
 	// probe this validator; `kms start` ignores them.
 	Name string `yaml:"name"`

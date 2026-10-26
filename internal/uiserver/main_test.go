@@ -15,6 +15,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	bluetooth.Dir = dir
+	bluetooth.SupportDir = dir + "/support"
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

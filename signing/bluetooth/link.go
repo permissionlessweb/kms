@@ -33,7 +33,14 @@ type SignRecord struct {
 
 // Link asks the paired phone to sign and waits for the signature.
 type Link struct {
+	// dir is this link's request drop (req.json/resp.json). home holds the
+	// KMS identity, pins and handoff state; it equals dir for a single link
+	// and is the mesh root for a per-phone link under links/<code>.
 	dir    string
+	home   string
+	// remote is the Noise static the phone last presented on this link,
+	// accepted or not, so routing and pairing know who answers here.
+	remote atomic.Value // []byte
 	mu     sync.Mutex
 	sessMu sync.Mutex
 	sess   *Session
@@ -54,7 +61,19 @@ type Link struct {
 // Open prepares dir and returns a link that reads and writes files there.
 func Open(dir string) *Link {
 	_ = os.MkdirAll(dir, 0o700)
-	return &Link{dir: dir, next: 1}
+	return &Link{dir: dir, home: dir, next: 1}
+}
+
+// openLink is a per-phone link: requests in io, identity and pins in home.
+func openLink(home, io string) *Link {
+	_ = os.MkdirAll(io, 0o700)
+	return &Link{dir: io, home: home, next: 1}
+}
+
+// Remote is the Noise static the phone last presented here (nil if none).
+func (l *Link) Remote() []byte {
+	b, _ := l.remote.Load().([]byte)
+	return append([]byte(nil), b...)
 }
 
 var (
@@ -241,24 +260,42 @@ func (l *Link) readySession() error {
 		if up {
 			return nil
 		}
-		if l.handshaking.CompareAndSwap(false, true) {
-			go func() {
-				defer l.handshaking.Store(false)
-				ctx, cancel := context.WithTimeout(context.Background(), 2*handshakeWait+time.Second)
-				defer cancel()
-				if err := l.ensureSession(ctx); err != nil {
-					l.lastHSErr.Store(err.Error())
-				} else {
-					l.lastHSErr.Store("")
-				}
-			}()
-		}
+		l.kick()
 	}
 	if e, _ := l.lastHSErr.Load().(string); e != "" {
 		return fmt.Errorf("%w (last handshake: %s)", ErrPhoneNotReady, e)
 	}
 	return ErrPhoneNotReady
 }
+
+// kick starts one background handshake unless one is running.
+func (l *Link) kick() bool {
+	if !l.handshaking.CompareAndSwap(false, true) {
+		return false
+	}
+	go func() {
+		defer l.handshaking.Store(false)
+		_ = l.handshakeNow()
+	}()
+	return true
+}
+
+// handshakeNow runs one handshake in the caller and records its outcome.
+// The caller holds the handshaking flag.
+func (l *Link) handshakeNow() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*handshakeWait+time.Second)
+	defer cancel()
+	err := l.ensureSession(ctx)
+	if err != nil {
+		l.lastHSErr.Store(err.Error())
+	} else {
+		l.lastHSErr.Store("")
+	}
+	return err
+}
+
+// LastError is the last handshake failure on this link ("" if none).
+func (l *Link) LastError() string { e, _ := l.lastHSErr.Load().(string); return e }
 
 // SessionUp reports whether votes can be sent now.
 func (l *Link) SessionUp() bool {
@@ -307,7 +344,7 @@ func (l *Link) exchangeWithin(ctx context.Context, frame []byte, wait time.Durat
 
 // SendKey moves a consensus secret to the phone inside a fresh Noise XX session.
 func (l *Link) SendKey(ctx context.Context, chain string, secret []byte) ([]byte, error) {
-	static, err := noiseStatic(l.dir)
+	static, err := noiseStatic(l.home)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +366,7 @@ func (l *Link) SendKey(ctx context.Context, chain string, secret []byte) ([]byte
 	if flight.sess == nil {
 		return nil, errors.New("bluetooth: import handshake is not finished")
 	}
-	if err := AcceptPhone(flight.sess.RemoteStatic); err != nil {
+	if err := acceptPhone(l.home, flight.sess.RemoteStatic); err != nil {
 		return nil, err
 	}
 	box, err := flight.SealKey(chain, secret)
@@ -351,7 +388,7 @@ func (l *Link) ensureSession(ctx context.Context) error {
 	if l.sess != nil {
 		return nil
 	}
-	static, err := noiseStatic(l.dir)
+	static, err := noiseStatic(l.home)
 	if err != nil {
 		return err
 	}
@@ -376,7 +413,10 @@ func (l *Link) ensureSession(ctx context.Context) error {
 	if err := init.ReadMessage2(reply[1:]); err != nil {
 		return err
 	}
-	if err := acceptPhone(l.dir, init.hs.rs); err != nil {
+	l.remote.Store(append([]byte(nil), init.hs.rs...))
+	// A phone with no pin stops here: it never receives message 3, so it
+	// never holds a session and is never sent a vote.
+	if err := acceptPhone(l.home, init.hs.rs); err != nil {
 		return err
 	}
 	msg3, sess, err := init.Message3()

@@ -194,6 +194,16 @@ func (s *Server) ownerPubkey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the QR is for "+q.Addr+", not the owner account "+granter, http.StatusUnprocessableEntity)
 		return
 	}
+	if bound, ok := s.ownerStore().get(body.ID); ok && bound.Granter != "" {
+		scanned := q.Addr
+		if scanned == "" && q.Pub != nil {
+			scanned = AccountAddress(q.Pub)
+		}
+		if scanned != "" && scanned != bound.Granter && strings.TrimSpace(body.Granter) == bound.Granter {
+			http.Error(w, "this slot's owner is "+bound.Granter+"; the scanned account is "+scanned+". Clear the owner first to bind another.", http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	source := "qr"
 	if q.Pub == nil {
 		rpc, _, ok := s.tabTarget(body.ID)

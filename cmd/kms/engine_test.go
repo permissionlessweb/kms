@@ -73,7 +73,7 @@ keys:
 		require.NoError(t, signer.InitState(ch.StateFile, 10, 0, 3))
 	}
 	rec := &statusRec{m: map[string]string{}, id: map[string]string{}}
-	e := &engine{path: path, c: c, st: rec, link: bluetooth.Open(ble), poll: 10 * time.Millisecond, stop: make(chan struct{}),
+	e := &engine{path: path, c: c, st: rec, link: bluetooth.NewMesh(ble), poll: 10 * time.Millisecond, stop: make(chan struct{}),
 		dial: func(config.Validator) privval.SocketDialer {
 			return func() (net.Conn, error) { return nil, errors.New("node not listening") }
 		}}
