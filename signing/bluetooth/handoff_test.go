@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
 )
 
 func testSecret(t *testing.T) []byte {

@@ -84,7 +84,9 @@ func readRegistry(home string) []Device {
 }
 
 // RegisterDevice adds or updates pub in the registry. It does not pin.
-func RegisterDevice(pub []byte, label, code string) error { return registerDevice(Dir, pub, label, code) }
+func RegisterDevice(pub []byte, label, code string) error {
+	return registerDevice(Dir, pub, label, code)
+}
 
 func registerDevice(home string, pub []byte, label, code string) error {
 	if len(pub) != 32 {

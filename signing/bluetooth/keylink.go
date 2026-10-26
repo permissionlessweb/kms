@@ -74,7 +74,7 @@ func decodeSignFor(in []byte) (id [8]byte, height uint64, round uint32, step uin
 // KeyLink is one validator key on a shared phone link. Every KeyLink on a
 // Link shares its Noise session and request slot; requests are serialized.
 type KeyLink struct {
-	l     *Link
+	l *Link
 	// m, when set, picks the link per vote: the live session of the phone
 	// pinned for label. One phone dropping never blocks another's slots.
 	m     *Mesh

@@ -68,7 +68,7 @@ type State struct {
 	Codes []string `json:"codes"`
 	// Devices is the phone mesh: one entry per authorized phone, plus the
 	// phone waiting for its fingerprint to be confirmed.
-	Devices []DeviceView `json:"devices"`
+	Devices  []DeviceView `json:"devices"`
 	MaxLinks int          `json:"max_links"`
 }
 

@@ -36,8 +36,8 @@ type Link struct {
 	// dir is this link's request drop (req.json/resp.json). home holds the
 	// KMS identity, pins and handoff state; it equals dir for a single link
 	// and is the mesh root for a per-phone link under links/<code>.
-	dir    string
-	home   string
+	dir  string
+	home string
 	// remote is the Noise static the phone last presented on this link,
 	// accepted or not, so routing and pairing know who answers here.
 	remote atomic.Value // []byte
