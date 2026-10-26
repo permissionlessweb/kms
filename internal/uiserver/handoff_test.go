@@ -8,10 +8,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cosmos/kms/signing/bluetooth"
 )
@@ -193,3 +196,62 @@ func TestHandoffCancelUnfreezes(t *testing.T) {
 }
 
 func hexs(b []byte) string { return hex.EncodeToString(b) }
+
+func TestHandoffExpiresUnsent(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "state"), 0o700)
+	os.WriteFile(filepath.Join(home, "kms.yaml"), []byte("chains:\n  - {id: e/s, state_file: state/e_s.json}\n"), 0o600)
+	os.WriteFile(filepath.Join(home, "state", "e_s.json"), []byte(`{"height":"7"}`), 0o600)
+	kd := filepath.Join(bluetooth.Dir, "keys", "e_s")
+	os.MkdirAll(kd, 0o700)
+	os.WriteFile(filepath.Join(kd, "pub.hex"), []byte(strings.Repeat("ab", 32)), 0o600)
+	defer os.RemoveAll(kd)
+	os.MkdirAll(bluetooth.SupportDir, 0o700)
+	os.WriteFile(filepath.Join(bluetooth.SupportDir, "phone.peer"), bytes.Repeat([]byte{0xA}, 32), 0o600)
+	defer os.RemoveAll(bluetooth.SupportDir)
+	now := time.Unix(1_800_000_000, 0)
+	handoffNow = func() time.Time { return now }
+	defer func() { handoffNow = time.Now }()
+	s := &Server{}
+	v := ValidatorView{ID: "e", ChainID: "e", Slot: "e/s", Signer: "phone", Source: filepath.Join(home, "kms.yaml")}
+	s.vals.list = []ValidatorView{v}
+	s.ownerStore().m["e"] = Owner{Granter: "terp1x"}
+	movesMu.Lock()
+	_, err := s.doStep(context.Background(), "start", v, "")
+	movesMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(14 * time.Minute)
+	movesMu.Lock()
+	m := resume("e_s")
+	movesMu.Unlock()
+	if m == nil {
+		t.Fatal("expired too early")
+	}
+	now = now.Add(2 * time.Minute)
+	movesMu.Lock()
+	delete(moves, "e_s") // as after a console restart
+	m = resume("e_s")
+	movesMu.Unlock()
+	if m != nil {
+		t.Fatal("stale move not expired")
+	}
+	h, _ := bluetooth.GetHandoff("e_s")
+	if h.Frozen || h.Floor != 17 {
+		t.Fatalf("%+v", h)
+	}
+}
+
+func TestHandoffGetNeedsLoopbackHost(t *testing.T) {
+	h := localGet(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	for host, want := range map[string]int{"127.0.0.1:8791": 200, "localhost:9000": 200, "evil.example:8791": 403} {
+		r := httptest.NewRequest("GET", "/api/handoff/state", nil)
+		r.Host = host
+		w := httptest.NewRecorder()
+		h(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: %d", host, w.Code)
+		}
+	}
+}

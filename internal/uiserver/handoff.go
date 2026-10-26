@@ -43,6 +43,12 @@ import (
 
 const handoffMargin = 10
 
+// handoffTTL: a move whose key was not yet sent (no retire proof) is
+// cancelled after this long; the floor stays. Matches the phone receive TTL.
+const handoffTTL = 15 * time.Minute
+
+var handoffNow = time.Now
+
 type move struct {
 	label, chain, slot string
 	nonce              [bluetooth.NonceSize]byte
@@ -51,6 +57,7 @@ type move struct {
 	pub                []byte
 	target             []byte
 	stage              string
+	started            int64
 }
 
 var (
@@ -60,8 +67,8 @@ var (
 )
 
 func (s *Server) registerHandoff(mux *http.ServeMux) {
-	mux.HandleFunc("/api/handoff/state", s.handoffState)
-	mux.HandleFunc("/api/handoff/qr.png", s.handoffQR)
+	mux.HandleFunc("/api/handoff/state", localGet(s.handoffState))
+	mux.HandleFunc("/api/handoff/qr.png", localGet(s.handoffQR))
 	for _, n := range []string{"start", "retire", "pair", "finish", "cancel"} {
 		mux.HandleFunc("/api/handoff/"+n, s.guard(s.handoffStep(n)))
 	}
@@ -175,7 +182,35 @@ func fpHex(b []byte) string {
 }
 
 // resume rebuilds a move from the handoff file after a console restart.
+// localGet refuses reads whose Host is not loopback (DNS rebinding).
+func localGet(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !localHost(r.Host) {
+			http.Error(w, "refused", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// expireStale cancels an unsent move older than handoffTTL. Callers hold movesMu.
+func expireStale(label string) bool {
+	h, err := bluetooth.GetHandoff(label)
+	if err != nil || !h.Frozen || h.Sent || h.StartedAt == 0 {
+		return false
+	}
+	if handoffNow().Sub(time.Unix(h.StartedAt, 0)) <= handoffTTL {
+		return false
+	}
+	if bluetooth.SetHandoff(label, bluetooth.Handoff{Frozen: false, Floor: h.Floor}) != nil {
+		return false
+	}
+	delete(moves, label)
+	return true
+}
+
 func resume(label string) *move {
+	expireStale(label)
 	if m := moves[label]; m != nil {
 		return m
 	}
@@ -260,7 +295,7 @@ func (s *Server) handoffStep(step string) http.HandlerFunc {
 
 func (m *move) persist(sent bool) error {
 	h := bluetooth.Handoff{Frozen: true, Floor: m.floor, Sent: sent, Chain: m.chain, Slot: m.slot,
-		Nonce: hex.EncodeToString(m.nonce[:]), KeyPub: hex.EncodeToString(m.pub), Old: hex.EncodeToString(m.old)}
+		Nonce: hex.EncodeToString(m.nonce[:]), KeyPub: hex.EncodeToString(m.pub), Old: hex.EncodeToString(m.old), StartedAt: m.started}
 	if m.target != nil {
 		h.Target = hex.EncodeToString(m.target)
 	}
@@ -306,7 +341,7 @@ func (s *Server) doStep(_ context.Context, step string, v ValidatorView, qr stri
 			return nil, fmt.Errorf("slot frozen, but its sign state is unreadable: %w", err)
 		}
 		pub, _ := hex.DecodeString(pubHex)
-		nm := &move{label: label, chain: v.ChainID, slot: slotName(v), old: old, pub: pub, floor: hgt + handoffMargin, stage: "retire"}
+		nm := &move{label: label, chain: v.ChainID, slot: slotName(v), old: old, pub: pub, floor: hgt + handoffMargin, stage: "retire", started: handoffNow().Unix()}
 		if _, err := rand.Read(nm.nonce[:]); err != nil {
 			return nil, err
 		}
@@ -412,7 +447,7 @@ func moveFromHandoff(label string, h bluetooth.Handoff) (*move, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &move{label: label, chain: h.Chain, slot: h.Slot, old: old, pub: pub, floor: h.Floor, stage: "retire"}
+	m := &move{label: label, chain: h.Chain, slot: h.Slot, old: old, pub: pub, floor: h.Floor, stage: "retire", started: h.StartedAt}
 	if h.Sent {
 		tgt, err := dec(h.Target, 32)
 		if err != nil {

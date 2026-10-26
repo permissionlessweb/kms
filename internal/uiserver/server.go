@@ -522,9 +522,13 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func localHost(host string) bool {
+	return host == "127.0.0.1:8791" || host == "localhost:8791" || strings.HasPrefix(host, "127.0.0.1:") || strings.HasPrefix(host, "localhost:")
+}
+
 func localPost(r *http.Request) bool {
 	host := r.Host
-	if host != "127.0.0.1:8791" && host != "localhost:8791" && !strings.HasPrefix(host, "127.0.0.1:") && !strings.HasPrefix(host, "localhost:") {
+	if !localHost(host) {
 		return false
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+host && origin != "http://127.0.0.1:8791" {

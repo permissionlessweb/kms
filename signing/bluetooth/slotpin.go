@@ -232,6 +232,9 @@ type Handoff struct {
 	KeyPub string `json:"key_pub,omitempty"`
 	Old    string `json:"old,omitempty"`
 	Target string `json:"target,omitempty"`
+	// StartedAt: unix seconds when the move froze the slot. An unsent move
+	// older than the console TTL is cancelled automatically.
+	StartedAt int64 `json:"started_at,omitempty"`
 }
 
 // SetHandoff stores the freeze and floor for label. The floor never goes down.
@@ -252,7 +255,7 @@ func setHandoff(dir, label string, h Handoff) error {
 	}
 	if cur.Sent && h.Frozen && !h.Sent {
 		// Only finish (unfreeze) clears a sent move.
-		h.Sent, h.Chain, h.Slot, h.Nonce, h.KeyPub, h.Old, h.Target = true, cur.Chain, cur.Slot, cur.Nonce, cur.KeyPub, cur.Old, cur.Target
+		h.Sent, h.Chain, h.Slot, h.Nonce, h.KeyPub, h.Old, h.Target, h.StartedAt = true, cur.Chain, cur.Slot, cur.Nonce, cur.KeyPub, cur.Old, cur.Target, cur.StartedAt
 	}
 	pd, err := peersDir(dir)
 	if err != nil {
