@@ -18,6 +18,7 @@ import (
 	gensignerservice "github.com/cosmos/kms/gen/signerservice"
 	"github.com/cosmos/kms/internal/identity"
 	"github.com/cosmos/kms/internal/manager"
+	"github.com/cosmos/kms/internal/metrics"
 	"github.com/cosmos/kms/internal/signer"
 	"github.com/cosmos/kms/internal/signerservice"
 	"github.com/cosmos/kms/internal/transport"
@@ -82,6 +83,12 @@ func BuildWith(c *config.Config, allowFresh []string, logger log.Logger, opts Op
 		}
 		if berr != nil {
 			return nil, cleanup, berr
+		}
+		s = metrics.WrapSigner(string(k.Backend), string(s.Scheme()), s)
+		if addr, aerr := signer.ConsensusAddress(s); aerr == nil {
+			for _, id := range k.ChainIDs {
+				metrics.KeyInfo.WithLabelValues(id, string(k.Backend), string(s.Scheme()), addr).Set(1)
+			}
 		}
 		closers = append(closers, s)
 		for _, id := range k.ChainIDs {
@@ -173,6 +180,9 @@ func BuildWith(c *config.Config, allowFresh []string, logger log.Logger, opts Op
 func newPrivvalSigner(k config.Key) (signing.Signer, error) {
 	switch k.Backend {
 	case config.BackendFile:
+		if k.Algorithm == "" {
+			k.Algorithm = config.AlgoED25519
+		}
 		s, err := file.Open(file.Config{
 			Algorithm: k.Algorithm,
 			KeyFile:   k.KeyFile,
